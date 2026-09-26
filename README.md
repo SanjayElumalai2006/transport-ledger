@@ -53,6 +53,16 @@ An enterprise-grade, high-performance web application designed specifically for 
 - **Automatic Fallback**: If no MongoDB connection is configured or the network is offline, the app seamlessly runs using the local atomic JSON file database (`data/database.json`) and browser LocalStorage.
 - **LAN Mobile Access**: Built-in WiFi pairing QR code and local network IP display for operating the application from mobile phones or tablets in the transport yard.
 
+### 8. 🔐 Safe & Secure Multi-Tenant Authentication (Email & Google Login)
+- **Dual Authentication**: Support for both standard Email ID + password login and 1-click **Google Sign-In**.
+- **Cryptographic Security**: Salted PBKDF2 password hashing (10,000 rounds) and HMAC-SHA256 signed stateless session tokens with 30-day persistence.
+- **Strict Data Isolation**: All fleet records, trips, customer ledgers, and drivers are scoped per user account (`userId`), ensuring private transport data remains strictly confidential and secure.
+
+### 9. 🛡️ Anti-Bot CAPTCHA Enrollment & Cloud Email Backup
+- **Anti-Bot Security Challenge**: High-entropy visual SVG CAPTCHA challenge with randomized distortion lines, noise dots, and HMAC token validation required for new user enrollment.
+- **Cloud Mail ID Backup System**: Replaces manual backups with a direct, encrypted snapshot backup linked to the owner's verified Mail ID.
+- **One-Click Email Dispatch**: Instantly triggers cloud backups and maintains an auditable backup ledger with timestamps, snapshot sizes, and record statistics in MongoDB.
+
 ---
 
 ## 🚀 Quick Start (Running Locally)

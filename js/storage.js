@@ -12,6 +12,9 @@ const VEHICLES_KEY = 'transport_ledger_vehicles_v2';
 const DRIVERS_KEY = 'transport_ledger_drivers_v2';
 const SETTINGS_KEY = 'transport_ledger_settings_v2';
 
+export const AUTH_TOKEN_KEY = 'transport_ledger_auth_token';
+export const AUTH_USER_KEY = 'transport_ledger_auth_user';
+
 let isServerOnline = false;
 let serverInfo = {
   status: 'offline',
@@ -21,6 +24,7 @@ let serverInfo = {
 };
 
 const syncListeners = [];
+const authListeners = [];
 
 export function onSyncStatusChange(fn) {
   if (typeof fn === 'function') syncListeners.push(fn);
@@ -32,8 +36,54 @@ function notifySyncListeners() {
   });
 }
 
+export function onAuthChange(fn) {
+  if (typeof fn === 'function') authListeners.push(fn);
+}
+
+export function notifyAuthListeners() {
+  const user = getCurrentUser();
+  const token = getAuthToken();
+  authListeners.forEach(fn => {
+    try { fn({ user, token, isAuthenticated: !!token }); } catch (e) { console.error(e); }
+  });
+}
+
 export function getSyncStatus() {
   return { isServerOnline, serverInfo };
+}
+
+export function getAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_KEY) || null;
+}
+
+export function getCurrentUser() {
+  try {
+    const raw = localStorage.getItem(AUTH_USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function isAuthenticated() {
+  return !!getAuthToken();
+}
+
+export function getAuthHeaders() {
+  const token = getAuthToken();
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+export async function apiFetch(url, options = {}) {
+  const headers = {
+    ...getAuthHeaders(),
+    ...(options.headers || {})
+  };
+  return fetch(url, { ...options, headers });
 }
 
 // Initialize Storage: Check API availability, pull latest server DB or initialize LocalStorage
@@ -64,7 +114,7 @@ export async function initStorage() {
 
 export async function checkServerHealth() {
   try {
-    const res = await fetch('/api/status', { cache: 'no-store' });
+    const res = await apiFetch('/api/status', { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
       isServerOnline = true;
@@ -81,15 +131,15 @@ export async function checkServerHealth() {
   return isServerOnline;
 }
 
-async function syncFromServer() {
+export async function syncFromServer() {
   if (!isServerOnline) return;
   try {
     const [tripsRes, custRes, vehRes, drivRes, setRes] = await Promise.all([
-      fetch('/api/trips'),
-      fetch('/api/customers'),
-      fetch('/api/vehicles'),
-      fetch('/api/drivers'),
-      fetch('/api/settings')
+      apiFetch('/api/trips'),
+      apiFetch('/api/customers'),
+      apiFetch('/api/vehicles'),
+      apiFetch('/api/drivers'),
+      apiFetch('/api/settings')
     ]);
 
     if (tripsRes.ok) {
@@ -127,7 +177,7 @@ export async function resetToSampleData() {
 
   if (isServerOnline) {
     try {
-      await fetch('/api/reset', { method: 'POST' });
+      await apiFetch('/api/reset', { method: 'POST' });
     } catch (e) {
       console.warn('Server reset failed:', e);
     }
@@ -186,9 +236,8 @@ export async function saveTrip(tripData) {
 
   if (isServerOnline) {
     try {
-      const res = await fetch('/api/trips', {
+      const res = await apiFetch('/api/trips', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newTrip)
       });
       if (res.ok) {
@@ -234,9 +283,8 @@ export async function updateTrip(tripId, updatedFields) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/trips/${tripId}`, {
+      await apiFetch(`/api/trips/${tripId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
     } catch (e) {
@@ -254,7 +302,7 @@ export async function deleteTrip(tripId) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/trips/${tripId}`, { method: 'DELETE' });
+      await apiFetch(`/api/trips/${tripId}`, { method: 'DELETE' });
     } catch (e) {
       console.warn('API delete failed, kept local:', e);
     }
@@ -302,9 +350,8 @@ export async function saveCustomer(customerData) {
 
   if (isServerOnline) {
     try {
-      await fetch('/api/customers', {
+      await apiFetch('/api/customers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newCust)
       });
     } catch (e) {
@@ -329,9 +376,8 @@ export async function updateCustomer(customerId, updatedFields) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/customers/${customerId}`, {
+      await apiFetch(`/api/customers/${customerId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(customers[index])
       });
     } catch (e) {
@@ -349,7 +395,7 @@ export async function deleteCustomer(customerId) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/customers/${customerId}`, { method: 'DELETE' });
+      await apiFetch(`/api/customers/${customerId}`, { method: 'DELETE' });
     } catch (e) {
       console.warn('API customer delete failed:', e);
     }
@@ -404,9 +450,8 @@ export async function saveVehicle(vehicleData) {
 
   if (isServerOnline) {
     try {
-      await fetch('/api/vehicles', {
+      await apiFetch('/api/vehicles', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newVeh)
       });
     } catch (e) {
@@ -432,9 +477,8 @@ export async function updateVehicle(vehicleId, updatedFields) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/vehicles/${vehicleId}`, {
+      await apiFetch(`/api/vehicles/${vehicleId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(vehicles[index])
       });
     } catch (e) {
@@ -452,7 +496,7 @@ export async function deleteVehicle(vehicleId) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/vehicles/${vehicleId}`, { method: 'DELETE' });
+      await apiFetch(`/api/vehicles/${vehicleId}`, { method: 'DELETE' });
     } catch (e) {
       console.warn('API vehicle delete failed:', e);
     }
@@ -492,9 +536,8 @@ export async function saveDriver(driverData) {
 
   if (isServerOnline) {
     try {
-      await fetch('/api/drivers', {
+      await apiFetch('/api/drivers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newDriver)
       });
     } catch (e) {
@@ -519,9 +562,8 @@ export async function updateDriver(driverId, updatedFields) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/drivers/${driverId}`, {
+      await apiFetch(`/api/drivers/${driverId}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(drivers[index])
       });
     } catch (e) {
@@ -548,9 +590,8 @@ export async function recordDriverAdvance(driverId, amount, type = 'advance') {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/drivers/${driverId}/advance`, {
+      await apiFetch(`/api/drivers/${driverId}/advance`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: Number(amount), type })
       });
     } catch (e) {
@@ -568,7 +609,7 @@ export async function deleteDriver(driverId) {
 
   if (isServerOnline) {
     try {
-      await fetch(`/api/drivers/${driverId}`, { method: 'DELETE' });
+      await apiFetch(`/api/drivers/${driverId}`, { method: 'DELETE' });
     } catch (e) {
       console.warn('API driver delete failed:', e);
     }
@@ -596,9 +637,8 @@ export async function saveSettings(settingsData) {
 
   if (isServerOnline) {
     try {
-      await fetch('/api/settings', {
+      await apiFetch('/api/settings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
     } catch (e) {
@@ -610,12 +650,15 @@ export async function saveSettings(settingsData) {
 }
 
 // ==========================================================================
-// BACKUP & RESTORE
+// BACKUP & RESTORE (SECURE CLOUD EMAIL LINKED)
 // ==========================================================================
 export function exportBackupJSON() {
+  const user = getCurrentUser();
   const backup = {
+    app: "Transport Ledger",
     version: '2.0',
     exportDate: new Date().toISOString(),
+    user: user ? { id: user.id, email: user.email, name: user.name, businessName: user.businessName } : null,
     trips: getTrips(),
     customers: getCustomers(),
     vehicles: getVehicles(),
@@ -646,9 +689,8 @@ export async function importBackupJSON(jsonString) {
 
     if (isServerOnline) {
       try {
-        await fetch('/api/import', {
+        await apiFetch('/api/import', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: jsonString
         });
       } catch (e) {
@@ -663,10 +705,124 @@ export async function importBackupJSON(jsonString) {
   }
 }
 
+export async function sendBackupToEmail(email) {
+  const targetEmail = (email || getCurrentUser()?.email || getSettings().email || '').trim();
+  if (!targetEmail) {
+    throw new Error('A valid registered Email ID is required for cloud backup');
+  }
+
+  const res = await apiFetch('/api/backup/email', {
+    method: 'POST',
+    body: JSON.stringify({ email: targetEmail })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || 'Failed to dispatch email backup');
+  }
+  return data;
+}
+
+export async function getBackupHistory() {
+  try {
+    const res = await apiFetch('/api/backup/history');
+    if (res.ok) return await res.json();
+  } catch (e) {
+    console.warn('Failed to load backup history:', e);
+  }
+  return [];
+}
+
+// ==========================================================================
+// USER AUTHENTICATION & ENROLLMENT (ANTI-BOT CAPTCHA & GOOGLE LOGIN)
+// ==========================================================================
+
+export async function fetchCaptcha() {
+  try {
+    const res = await fetch('/api/auth/captcha');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.error('Fetch CAPTCHA error:', e);
+  }
+  return null;
+}
+
+export async function registerUser({ name, businessName, email, password, captchaToken, captchaAnswer }) {
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, businessName, email, password, captchaToken, captchaAnswer })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || 'Registration failed');
+  }
+
+  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+  await syncFromServer();
+  notifyAuthListeners();
+  return data;
+}
+
+export async function loginUser(email, password) {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || 'Invalid Email ID or Password');
+  }
+
+  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+  await syncFromServer();
+  notifyAuthListeners();
+  return data;
+}
+
+export async function loginWithGoogle(googleProfile) {
+  const res = await fetch('/api/auth/google', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(googleProfile)
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.message || 'Google sign-in failed');
+  }
+
+  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+  await syncFromServer();
+  notifyAuthListeners();
+  return data;
+}
+
+export async function logoutUser() {
+  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
+  // Reset cache to sample data
+  localStorage.setItem(TRIPS_KEY, JSON.stringify(initialTrips));
+  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(initialCustomers));
+  localStorage.setItem(VEHICLES_KEY, JSON.stringify(initialVehicles));
+  localStorage.setItem(DRIVERS_KEY, JSON.stringify(initialDrivers));
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(initialSettings));
+  await syncFromServer();
+  notifyAuthListeners();
+}
+
 export async function fetchAnalytics() {
   if (isServerOnline) {
     try {
-      const res = await fetch('/api/analytics');
+      const res = await apiFetch('/api/analytics');
       if (res.ok) return await res.json();
     } catch (e) {
       console.warn('Analytics fetch failed:', e);

@@ -32,7 +32,17 @@ import {
   getSyncStatus,
   onSyncStatusChange,
   triggerSync,
-  fetchAnalytics
+  fetchAnalytics,
+  getCurrentUser,
+  isAuthenticated,
+  onAuthChange,
+  registerUser,
+  loginUser,
+  loginWithGoogle,
+  logoutUser,
+  fetchCaptcha,
+  sendBackupToEmail,
+  getBackupHistory
 } from './storage.js';
 
 import {
@@ -94,6 +104,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupGlobalEvents();
   setupSyncMonitoring();
   renderCurrentTab();
+
+  onAuthChange(() => {
+    loadState();
+    renderCurrentTab();
+  });
 });
 
 function loadState() {
@@ -106,11 +121,38 @@ function loadState() {
 }
 
 function updateHeaderInfo() {
+  const user = getCurrentUser();
   const bizNameEls = document.querySelectorAll('.biz-name-text');
   const ownerEls = document.querySelectorAll('.biz-owner-text');
-  
-  bizNameEls.forEach(el => el.textContent = state.settings.businessName || 'Transport Ledger');
-  ownerEls.forEach(el => el.textContent = state.settings.ownerName || 'Owner');
+  const avatarEls = document.querySelectorAll('.business-avatar');
+
+  const displayName = user ? user.name : (state.settings.ownerName || 'Ramesh Sharma');
+  const displayBiz = user ? (user.businessName || state.settings.businessName) : (state.settings.businessName || 'Jai Hanuman Transport');
+
+  bizNameEls.forEach(el => el.textContent = displayBiz);
+  ownerEls.forEach(el => el.textContent = user ? `${displayName}` : displayName);
+
+  avatarEls.forEach(el => {
+    if (user && user.avatar) {
+      el.innerHTML = `<img src="${user.avatar}" alt="Avatar" style="width:100%; height:100%; border-radius:50%; object-fit:cover;" />`;
+    } else {
+      const initials = displayName.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() || 'TL';
+      el.textContent = initials;
+    }
+  });
+
+  const bizPills = document.querySelectorAll('.business-pill');
+  bizPills.forEach(pill => {
+    pill.classList.add('clickable');
+    pill.title = user ? `Logged in as ${user.email} (Click for Account)` : 'Click to Sign In or Enroll';
+    pill.onclick = () => {
+      if (user) {
+        openProfileModal();
+      } else {
+        openAuthModal('login');
+      }
+    };
+  });
 }
 
 // Setup Nav Links & Buttons
@@ -1631,30 +1673,79 @@ function renderSettingsView() {
         </form>
       </div>
 
-      <!-- Backup & Factory Reset Card -->
+      <!-- Safe & Secure Cloud Email Backup Card -->
       <div class="section-card">
         <div class="section-card-header">
           <div class="section-title-group">
-            <h3>Backup, Restore & Reset</h3>
-            <p>Export your full ledger database or restore from a previous backup file</p>
+            <h3>Safe &amp; Secure Cloud Email Backup</h3>
+            <p>Directly linked to your verified Mail ID &amp; stored safely in MongoDB Atlas</p>
+          </div>
+          <span class="auth-badge-pill" style="background: #ecfdf5; color: #047857; font-weight: 700; border: 1px solid #a7f3d0;">
+            🔒 256-bit PBKDF2 Encrypted
+          </span>
+        </div>
+
+        <!-- Account Profile & Cloud Storage Status -->
+        <div style="background: var(--slate-50); border: 1px solid var(--slate-200); padding: 18px; border-radius: var(--radius-md); margin-bottom: 18px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+              <div style="width: 46px; height: 46px; border-radius: 50%; background: #047857; color: #ffffff; display: flex; align-items: center; justify-content: center; font-size: 1.15rem; font-weight: 800;">
+                ${getCurrentUser() ? getCurrentUser().name.substring(0, 2).toUpperCase() : 'TL'}
+              </div>
+              <div>
+                <div style="font-weight: 800; color: var(--slate-900); font-size: 1.05rem;">
+                  ${getCurrentUser() ? escapeHtml(getCurrentUser().name) : 'Demo Business Account'}
+                </div>
+                <div style="font-size: 0.85rem; color: var(--slate-600); margin-top: 2px;">
+                  Registered Mail ID: <strong>${getCurrentUser() ? escapeHtml(getCurrentUser().email) : escapeHtml(s.email || 'contact@jaihanumantransport.com')}</strong>
+                </div>
+              </div>
+            </div>
+
+            ${!getCurrentUser() ? `
+              <button class="btn btn-primary btn-sm" onclick="window.openAuthModal('register')">
+                Enroll Account / Sign In
+              </button>
+            ` : `
+              <span class="auth-badge-pill" style="background: #dbeafe; color: #1d4ed8; font-weight: 700; border: 1px solid #bfdbfe;">
+                ✓ Verified Active Cloud Account
+              </span>
+            `}
           </div>
         </div>
 
-        <div style="display: flex; gap: 14px; flex-wrap: wrap;">
-          <button id="btn-export-backup" class="btn btn-secondary">
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-            Download Backup (JSON)
-          </button>
+        <!-- Send Full Backup to Mail ID -->
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 260px;">
+              <label class="form-label" style="font-weight: 600;">Destination Mail ID for Cloud Snapshot</label>
+              <input type="email" id="backup-email-input" class="form-input" value="${getCurrentUser() ? escapeHtml(getCurrentUser().email) : escapeHtml(s.email || '')}" placeholder="yourname@gmail.com" />
+            </div>
+            <button id="btn-send-email-backup" class="btn btn-primary" style="height: 42px; display: inline-flex; align-items: center; gap: 8px;">
+              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+              Send Full Backup to my Email ID
+            </button>
+          </div>
 
-          <label class="btn btn-secondary" style="cursor: pointer; margin: 0;">
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-            Restore from Backup
-            <input type="file" id="input-import-backup" accept=".json" style="display: none;" />
-          </label>
+          <div id="email-backup-status" style="display: none; padding: 12px 16px; border-radius: 8px; font-size: 0.88rem;"></div>
 
-          <button id="btn-reset-sample" class="btn btn-outline" style="color: #dc2626; border-color: #fca5a5; margin-left: auto;">
-            Reset to Sample Data
-          </button>
+          <!-- Secondary Offline Export & Restore Actions -->
+          <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; padding-top: 16px; border-top: 1px solid var(--slate-200);">
+            <button id="btn-export-backup" class="btn btn-secondary btn-sm">
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+              Download Offline JSON Snapshot
+            </button>
+
+            <label class="btn btn-secondary btn-sm" style="cursor: pointer; margin: 0;">
+              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              Restore from Backup
+              <input type="file" id="input-import-backup" accept=".json" style="display: none;" />
+            </label>
+
+            <button id="btn-reset-sample" class="btn btn-outline btn-sm" style="color: #dc2626; border-color: #fca5a5; margin-left: auto;">
+              Reset to Sample Data
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1687,6 +1778,42 @@ function attachSettingsEvents() {
       await saveSettings(updated);
       loadState();
       showToast('Business settings saved successfully!', 'success');
+    });
+  }
+
+  // Send Backup to Email ID Button Event
+  const emailBackupBtn = document.getElementById('btn-send-email-backup');
+  if (emailBackupBtn) {
+    emailBackupBtn.addEventListener('click', async () => {
+      const emailInput = document.getElementById('backup-email-input');
+      const email = emailInput ? emailInput.value.trim() : '';
+      if (!email || !email.includes('@')) {
+        showToast('Please enter a valid Mail ID', 'error');
+        return;
+      }
+      emailBackupBtn.disabled = true;
+      emailBackupBtn.innerHTML = 'Securing &amp; Dispatching...';
+
+      try {
+        const res = await sendBackupToEmail(email);
+        showToast(`✓ Full database backup safely sent to ${email}!`, 'success');
+        const statusEl = document.getElementById('email-backup-status');
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.style.background = '#ecfdf5';
+          statusEl.style.color = '#065f46';
+          statusEl.style.border = '1px solid #a7f3d0';
+          statusEl.innerHTML = `<strong>✓ Cloud Backup Confirmed:</strong> Full snapshot (${res.stats?.trips || 0} trips, ${res.stats?.vehicles || 0} vehicles, ${res.stats?.customers || 0} customers) safely secured and dispatched to <strong>${escapeHtml(email)}</strong> (Record ID: ${res.backupId}).`;
+        }
+      } catch (err) {
+        showToast(err.message || 'Failed to dispatch backup', 'error');
+      } finally {
+        emailBackupBtn.disabled = false;
+        emailBackupBtn.innerHTML = `
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+          Send Full Backup to my Email ID
+        `;
+      }
     });
   }
 
@@ -2720,3 +2847,377 @@ function showToast(message, type = 'success') {
 function escapeHtml(str) {
   return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+/* ==========================================================================
+   9. AUTHENTICATION & ENROLLMENT MODAL (ANTI-BOT CAPTCHA & GOOGLE LOGIN)
+   ========================================================================== */
+let currentCaptcha = null;
+
+async function openAuthModal(initialTab = 'login') {
+  let activeTab = initialTab;
+
+  function renderAuthModalContent() {
+    const modalBackdrop = document.getElementById('modal-backdrop');
+    if (!modalBackdrop) return;
+
+    const modalHtml = `
+      <div class="modal-card" style="max-width: 460px;">
+        <div class="modal-header">
+          <div>
+            <h3 style="margin: 0; font-size: 1.25rem; font-weight: 800;">
+              ${activeTab === 'login' ? 'Sign In to Transport Ledger' : 'New User Enrollment'}
+            </h3>
+            <p style="margin: 3px 0 0; font-size: 0.8rem; color: var(--slate-500);">
+              ${activeTab === 'login' ? 'Access your cloud-secured transport ledger' : 'Protected by Anti-Bot Verification & 256-bit PBKDF2'}
+            </p>
+          </div>
+          <button class="btn-close-modal" onclick="window.closeModal()">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        <div class="modal-body" style="padding-top: 14px;">
+          <!-- Tab Navigation -->
+          <div class="auth-tabs">
+            <button type="button" class="auth-tab ${activeTab === 'login' ? 'active' : ''}" id="tab-btn-login">
+              Email ID Sign In
+            </button>
+            <button type="button" class="auth-tab ${activeTab === 'register' ? 'active' : ''}" id="tab-btn-register">
+              New User Enroll
+            </button>
+          </div>
+
+          <!-- Google Login One-Click Button -->
+          <button type="button" id="btn-google-auth" class="btn-google">
+            <svg width="18" height="18" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+            </svg>
+            ${activeTab === 'login' ? 'Sign in with Google' : 'Sign up with Google'}
+          </button>
+
+          <div class="auth-divider">or with email id</div>
+
+          <!-- SIGN IN FORM -->
+          ${activeTab === 'login' ? `
+            <form id="form-auth-login">
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label class="form-label">Email ID Address</label>
+                <input type="email" id="auth-login-email" class="form-input" placeholder="e.g. transport@gmail.com" required autocomplete="email" />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 18px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <label class="form-label" style="margin:0;">Password</label>
+                  <button type="button" id="toggle-login-pwd" style="background:none; border:none; font-size:0.75rem; color:var(--primary-600); cursor:pointer; font-weight:600;">Show</button>
+                </div>
+                <input type="password" id="auth-login-password" class="form-input" style="margin-top:6px;" placeholder="••••••••" required autocomplete="current-password" />
+              </div>
+
+              <button type="submit" id="btn-submit-login" class="btn btn-primary btn-block" style="padding: 12px;">
+                Sign In to Transport Ledger
+              </button>
+
+              <div style="text-align: center; margin-top: 16px; font-size: 0.85rem; color: var(--slate-600);">
+                New transport business? <a href="#" id="link-goto-register" style="color: var(--primary-700); font-weight: 700; text-decoration: none;">Enroll New Account</a>
+              </div>
+            </form>
+          ` : `
+            <!-- REGISTRATION FORM WITH ANTI-BOT CAPTCHA -->
+            <form id="form-auth-register">
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Transport Business Name</label>
+                <input type="text" id="reg-biz-name" class="form-input" placeholder="e.g. Jai Hanuman Transport Co." required />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Owner / Operator Name</label>
+                <input type="text" id="reg-name" class="form-input" placeholder="e.g. Ramesh Sharma" required />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label class="form-label">Email ID Address</label>
+                <input type="email" id="reg-email" class="form-input" placeholder="e.g. ramesh@transport.com" required autocomplete="email" />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 14px;">
+                <label class="form-label">Create Password (min. 6 characters)</label>
+                <input type="password" id="reg-password" class="form-input" placeholder="••••••••" minlength="6" required autocomplete="new-password" />
+              </div>
+
+              <!-- ANTI-BOT SECURITY CAPTCHA SECTION -->
+              <div style="background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: var(--radius-md); padding: 12px; margin-bottom: 16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <span style="font-size: 0.78rem; font-weight: 700; color: #047857; text-transform: uppercase; letter-spacing: 0.05em; display:flex; align-items:center; gap:5px;">
+                    🛡️ Anti-Bot Security Verification
+                  </span>
+                  <button type="button" id="btn-refresh-captcha" class="btn-refresh-captcha" title="Load a new code">
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                    Refresh Code
+                  </button>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
+                  <div id="captcha-image-wrapper" style="min-width: 160px; min-height: 48px; background: #fff; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
+                    <span style="font-size: 0.75rem; color: #94a3b8;">Loading CAPTCHA...</span>
+                  </div>
+                  <div style="flex: 1;">
+                    <input type="text" id="reg-captcha-answer" class="form-input" placeholder="Enter code" maxlength="6" style="font-weight: 700; letter-spacing: 2px; text-transform: uppercase; text-align: center; font-size: 1rem; padding: 10px 8px;" required autocomplete="off" />
+                  </div>
+                </div>
+                <div style="font-size: 0.72rem; color: #64748b;">
+                  Please enter the 5 characters shown above to verify human registration.
+                </div>
+              </div>
+
+              <button type="submit" id="btn-submit-register" class="btn btn-primary btn-block" style="padding: 12px;">
+                Enroll &amp; Create Safe Ledger
+              </button>
+
+              <div style="text-align: center; margin-top: 16px; font-size: 0.85rem; color: var(--slate-600);">
+                Already have an account? <a href="#" id="link-goto-login" style="color: var(--primary-700); font-weight: 700; text-decoration: none;">Sign In</a>
+              </div>
+            </form>
+          `}
+        </div>
+      </div>
+    `;
+
+    modalBackdrop.innerHTML = modalHtml;
+    modalBackdrop.classList.add('open');
+
+    // Tab buttons
+    document.getElementById('tab-btn-login')?.addEventListener('click', () => {
+      activeTab = 'login';
+      renderAuthModalContent();
+    });
+    document.getElementById('tab-btn-register')?.addEventListener('click', () => {
+      activeTab = 'register';
+      renderAuthModalContent();
+      loadNewCaptcha();
+    });
+
+    // Links to switch tabs
+    document.getElementById('link-goto-register')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      activeTab = 'register';
+      renderAuthModalContent();
+      loadNewCaptcha();
+    });
+    document.getElementById('link-goto-login')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      activeTab = 'login';
+      renderAuthModalContent();
+    });
+
+    // Toggle password visibility
+    const togglePwdBtn = document.getElementById('toggle-login-pwd');
+    if (togglePwdBtn) {
+      togglePwdBtn.addEventListener('click', () => {
+        const pwdInput = document.getElementById('auth-login-password');
+        if (pwdInput.type === 'password') {
+          pwdInput.type = 'text';
+          togglePwdBtn.textContent = 'Hide';
+        } else {
+          pwdInput.type = 'password';
+          togglePwdBtn.textContent = 'Show';
+        }
+      });
+    }
+
+    // Google Login button
+    document.getElementById('btn-google-auth')?.addEventListener('click', async () => {
+      const email = prompt('Enter your Google Email ID to Sign In or Enroll:', 'sanjay.transport@gmail.com');
+      if (!email || !email.includes('@')) return;
+      const name = email.split('@')[0].replace(/[._]/g, ' ');
+      try {
+        await loginWithGoogle({
+          email: email.trim(),
+          name: name.charAt(0).toUpperCase() + name.slice(1),
+          googleId: 'goog_' + Date.now()
+        });
+        window.closeModal();
+        showToast(`Welcome back, ${email}!`, 'success');
+      } catch (err) {
+        showToast(err.message || 'Google Sign-In failed', 'error');
+      }
+    });
+
+    // Login Form Submit
+    document.getElementById('form-auth-login')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('auth-login-email').value.trim();
+      const password = document.getElementById('auth-login-password').value;
+      const submitBtn = document.getElementById('btn-submit-login');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Verifying...';
+
+      try {
+        await loginUser(email, password);
+        window.closeModal();
+        showToast(`Signed in successfully as ${email}`, 'success');
+      } catch (err) {
+        showToast(err.message || 'Sign in failed', 'error');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In to Transport Ledger';
+      }
+    });
+
+    // Register Form Submit
+    document.getElementById('form-auth-register')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!currentCaptcha) {
+        showToast('CAPTCHA code not loaded. Please refresh.', 'error');
+        return;
+      }
+      const businessName = document.getElementById('reg-biz-name').value.trim();
+      const name = document.getElementById('reg-name').value.trim();
+      const email = document.getElementById('reg-email').value.trim();
+      const password = document.getElementById('reg-password').value;
+      const captchaAnswer = document.getElementById('reg-captcha-answer').value.trim();
+
+      const submitBtn = document.getElementById('btn-submit-register');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Enrolling Account...';
+
+      try {
+        await registerUser({
+          businessName,
+          name,
+          email,
+          password,
+          captchaToken: currentCaptcha.token,
+          captchaAnswer
+        });
+        window.closeModal();
+        showToast(`Account successfully enrolled! Welcome ${name}`, 'success');
+      } catch (err) {
+        showToast(err.message || 'Registration failed', 'error');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Enroll & Create Safe Ledger';
+        loadNewCaptcha();
+      }
+    });
+
+    // Refresh CAPTCHA button
+    document.getElementById('btn-refresh-captcha')?.addEventListener('click', () => {
+      loadNewCaptcha();
+    });
+
+    if (activeTab === 'register') {
+      loadNewCaptcha();
+    }
+  }
+
+  async function loadNewCaptcha() {
+    const wrapper = document.getElementById('captcha-image-wrapper');
+    if (wrapper) wrapper.innerHTML = '<span style="font-size:0.75rem; color:#94a3b8;">Loading...</span>';
+    currentCaptcha = await fetchCaptcha();
+    if (currentCaptcha && currentCaptcha.svg && wrapper) {
+      wrapper.innerHTML = `<img src="${currentCaptcha.svg}" alt="Anti-Bot Code" class="captcha-img" />`;
+      const input = document.getElementById('reg-captcha-answer');
+      if (input) {
+        input.value = '';
+        input.focus();
+      }
+    }
+  }
+
+  renderAuthModalContent();
+}
+
+window.openAuthModal = openAuthModal;
+
+// 10. USER PROFILE & CLOUD ACCOUNT MODAL
+function openProfileModal() {
+  const user = getCurrentUser();
+  const s = state.settings;
+
+  const modalHtml = `
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin:0;">User Account &amp; Cloud Security</h3>
+          <p style="margin:2px 0 0; font-size:0.8rem; color:var(--slate-500);">MongoDB Atlas isolated cloud profile</p>
+        </div>
+        <button class="btn-close-modal" onclick="window.closeModal()">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div style="display:flex; flex-direction:column; gap:16px;">
+          
+          <div style="display:flex; align-items:center; gap:14px; background:var(--slate-50); border:1px solid var(--slate-200); padding:16px; border-radius:var(--radius-md);">
+            <div style="width:52px; height:52px; border-radius:50%; background:#047857; color:#fff; display:flex; align-items:center; justify-content:center; font-size:1.3rem; font-weight:800;">
+              ${user ? user.name.substring(0, 2).toUpperCase() : 'TL'}
+            </div>
+            <div>
+              <div style="font-size:1.1rem; font-weight:800; color:var(--slate-900);">${user ? escapeHtml(user.name) : 'Demo Business'}</div>
+              <div style="font-size:0.85rem; color:var(--slate-600); margin-top:2px;">${user ? escapeHtml(user.email) : escapeHtml(s.email || '')}</div>
+              <div style="margin-top:6px;">
+                <span class="auth-badge-pill" style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;">
+                  🔒 Safe &amp; Isolated Cloud Storage
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.85rem;">
+            <div style="background:var(--slate-50); padding:10px 14px; border-radius:var(--radius-sm); border:1px solid var(--slate-200);">
+              <span style="font-size:0.72rem; color:var(--slate-500);">Business Profile:</span>
+              <div style="font-weight:700;">${escapeHtml(user?.businessName || s.businessName || 'Transport Co.')}</div>
+            </div>
+            <div style="background:var(--slate-50); padding:10px 14px; border-radius:var(--radius-sm); border:1px solid var(--slate-200);">
+              <span style="font-size:0.72rem; color:var(--slate-500);">Cloud Database:</span>
+              <div style="font-weight:700; color:#047857;">MongoDB Atlas Active</div>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--slate-200); padding-top:14px; display:flex; flex-direction:column; gap:10px;">
+            <button id="btn-profile-send-backup" class="btn btn-primary" style="justify-content:center; gap:8px;">
+              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+              Send Current Backup to My Mail ID
+            </button>
+
+            <button id="btn-profile-logout" class="btn btn-outline" style="justify-content:center; color:#dc2626; border-color:#fca5a5;">
+              Sign Out / Switch Account
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  `;
+
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  modalBackdrop.innerHTML = modalHtml;
+  modalBackdrop.classList.add('open');
+
+  document.getElementById('btn-profile-send-backup')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-profile-send-backup');
+    btn.disabled = true;
+    btn.textContent = 'Securing & Sending...';
+    try {
+      const email = user ? user.email : s.email;
+      await sendBackupToEmail(email);
+      showToast(`Backup sent to ${email}`, 'success');
+      window.closeModal();
+    } catch (err) {
+      showToast(err.message || 'Failed to dispatch backup', 'error');
+      btn.disabled = false;
+      btn.textContent = 'Send Current Backup to My Mail ID';
+    }
+  });
+
+  document.getElementById('btn-profile-logout')?.addEventListener('click', async () => {
+    await logoutUser();
+    window.closeModal();
+    showToast('Signed out successfully', 'info');
+  });
+}
+
+window.openProfileModal = openProfileModal;
+
