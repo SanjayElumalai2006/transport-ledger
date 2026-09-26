@@ -1526,3 +1526,95 @@ button, input, select, textarea { font-family: inherit; }
   font-weight: 700;
 }
 
+/* Dedicated Login View & Gateway */
+.login-view-wrapper {
+  max-width: 480px;
+  margin: 32px auto 60px;
+  padding: 0 16px;
+}
+
+.login-view-card {
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--slate-200);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  padding: 32px 28px;
+}
+
+[data-theme="dark"] .login-view-card {
+  background: var(--slate-900);
+  border-color: var(--slate-800);
+}
+
+.demo-alert-banner {
+  background: linear-gradient(135deg, #fef3c7 0%, #fef9c3 100%);
+  border: 1.5px solid #fde047;
+  color: #92400e;
+  border-radius: var(--radius-md);
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+  font-size: 0.88rem;
+}
+
+[data-theme="dark"] .demo-alert-banner {
+  background: #451a03;
+  border-color: #78350f;
+  color: #fde68a;
+}
+
+.google-account-selector {
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--slate-50);
+  margin-bottom: 16px;
+}
+
+.google-acc-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #ffffff;
+  border: 1px solid var(--slate-300);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-top: 6px;
+}
+
+.google-acc-pill:hover {
+  border-color: #4285F4;
+  background: #f8fafc;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(66, 133, 244, 0.15);
+}
+
+.auth-form-feedback {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 14px;
+  display: none;
+}
+
+.auth-form-feedback.error {
+  display: block;
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.auth-form-feedback.success {
+  display: block;
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+

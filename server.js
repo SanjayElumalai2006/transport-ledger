@@ -87,7 +87,9 @@ function serveStaticFile(req, res, pathname) {
       'Content-Type': contentType,
       'Content-Length': stats.size,
       'Access-Control-Allow-Origin': '*',
-      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=86400'
+      'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Expires': '0'
     });
 
     const stream = fs.createReadStream(filePath);

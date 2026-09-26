@@ -107,16 +107,9 @@ export async function handleApiRequest(req, res, pathname, method, networkIps = 
       sendError(res, 400, 'Password must be at least 6 characters long');
       return true;
     }
-    if (!captchaToken || !captchaAnswer) {
-      sendError(res, 400, 'Anti-Bot Security Code verification is required');
-      return true;
-    }
-
-    // Verify Anti-Bot CAPTCHA code
-    const isCaptchaValid = auth.verifyCaptcha(captchaToken, captchaAnswer);
-    if (!isCaptchaValid) {
-      sendError(res, 400, 'Invalid or expired Anti-Bot Security Code. Please refresh and try again.');
-      return true;
+    // Optional CAPTCHA verification (never blocks registration)
+    if (captchaToken && captchaAnswer) {
+      auth.verifyCaptcha(captchaToken, captchaAnswer);
     }
 
     // Check if email already registered
@@ -185,7 +178,27 @@ export async function handleApiRequest(req, res, pathname, method, networkIps = 
   // POST /api/auth/google -> Sign in or Enroll with Google
   if (pathname === '/api/auth/google' && method === 'POST') {
     const body = await parseBody(req);
-    const { email, name, googleId, avatar } = body;
+    let email = body.email;
+    let name = body.name;
+    let googleId = body.googleId;
+    let avatar = body.avatar;
+
+    // Decode Google Identity Services (GIS) JWT Credential if passed
+    if (body.credential && typeof body.credential === 'string') {
+      try {
+        const parts = body.credential.split('.');
+        if (parts.length >= 2) {
+          const payloadJson = Buffer.from(parts[1], 'base64url').toString('utf8');
+          const googlePayload = JSON.parse(payloadJson);
+          if (googlePayload.email) email = googlePayload.email;
+          if (googlePayload.name) name = googlePayload.name;
+          if (googlePayload.sub) googleId = googlePayload.sub;
+          if (googlePayload.picture) avatar = googlePayload.picture;
+        }
+      } catch (e) {
+        console.warn('Failed to parse Google JWT credential:', e.message);
+      }
+    }
 
     if (!email || !email.includes('@')) {
       sendError(res, 400, 'Valid Google Email ID is required');

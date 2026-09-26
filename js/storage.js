@@ -1,16 +1,16 @@
 /**
  * Hybrid Smart Storage Engine for Transport Ledger
  * Seamlessly interfaces with the Node.js REST API backend with real-time multi-device sync,
- * while automatically maintaining an offline resilient LocalStorage cache.
+ * while automatically maintaining an offline resilient, per-user isolated LocalStorage cache.
  */
 
 import { initialTrips, initialCustomers, initialVehicles, initialDrivers, initialSettings } from './sampleData.js';
 
-const TRIPS_KEY = 'transport_ledger_trips_v2';
-const CUSTOMERS_KEY = 'transport_ledger_customers_v2';
-const VEHICLES_KEY = 'transport_ledger_vehicles_v2';
-const DRIVERS_KEY = 'transport_ledger_drivers_v2';
-const SETTINGS_KEY = 'transport_ledger_settings_v2';
+const TRIPS_BASE_KEY = 'transport_ledger_trips_v2';
+const CUSTOMERS_BASE_KEY = 'transport_ledger_customers_v2';
+const VEHICLES_BASE_KEY = 'transport_ledger_vehicles_v2';
+const DRIVERS_BASE_KEY = 'transport_ledger_drivers_v2';
+const SETTINGS_BASE_KEY = 'transport_ledger_settings_v2';
 
 export const AUTH_TOKEN_KEY = 'transport_ledger_auth_token';
 export const AUTH_USER_KEY = 'transport_ledger_auth_user';
@@ -69,6 +69,16 @@ export function isAuthenticated() {
   return !!getAuthToken();
 }
 
+export function getApiBaseUrl() {
+  if (typeof window === 'undefined') return 'http://localhost:8080';
+  if (window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
+    if ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port && window.location.port !== '8080') {
+      return `http://${window.location.hostname}:8080`;
+    }
+  }
+  return '';
+}
+
 export function getAuthHeaders() {
   const token = getAuthToken();
   const headers = { 'Content-Type': 'application/json' };
@@ -79,30 +89,70 @@ export function getAuthHeaders() {
 }
 
 export async function apiFetch(url, options = {}) {
+  const baseUrl = getApiBaseUrl();
+  const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
   const headers = {
     ...getAuthHeaders(),
     ...(options.headers || {})
   };
-  return fetch(url, { ...options, headers });
+  return fetch(fullUrl, { ...options, headers });
 }
 
-// Initialize Storage: Check API availability, pull latest server DB or initialize LocalStorage
+// Multi-tenant key scoping: isolates demo cache from authenticated user caches
+export function getActiveStorageKey(baseKey) {
+  const user = getCurrentUser();
+  const uid = user ? (user.id || user._id) : 'demo';
+  return `${baseKey}_${uid}`;
+}
+
+export function getLocalItem(baseKey, defaultValue = null) {
+  try {
+    const raw = localStorage.getItem(getActiveStorageKey(baseKey));
+    return raw !== null ? JSON.parse(raw) : defaultValue;
+  } catch (e) {
+    return defaultValue;
+  }
+}
+
+export function setLocalItem(baseKey, value) {
+  try {
+    localStorage.setItem(getActiveStorageKey(baseKey), JSON.stringify(value));
+  } catch (e) {
+    console.error('Failed to save to local cache:', e);
+  }
+}
+
+// Initialize Storage: Check session & auto-login, pull latest server DB or initialize LocalStorage
 export async function initStorage() {
-  // Ensure local storage has basic defaults first as fallback
-  if (!localStorage.getItem(TRIPS_KEY)) {
-    localStorage.setItem(TRIPS_KEY, JSON.stringify(initialTrips));
+  // Check if we have an existing session token to auto-login
+  const token = getAuthToken();
+  if (token) {
+    try {
+      const meRes = await apiFetch('/api/auth/me');
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        if (meData.authenticated && meData.user) {
+          localStorage.setItem(AUTH_USER_KEY, JSON.stringify(meData.user));
+          console.log('[Auth] Active session verified for:', meData.user.email);
+        } else {
+          // Token expired or invalid
+          console.warn('[Auth] Session expired or invalid, reverting to guest mode');
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          localStorage.removeItem(AUTH_USER_KEY);
+        }
+      }
+    } catch (e) {
+      console.warn('[Auth] Session check failed, continuing with cached session:', e);
+    }
   }
-  if (!localStorage.getItem(CUSTOMERS_KEY)) {
-    localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(initialCustomers));
-  }
-  if (!localStorage.getItem(VEHICLES_KEY)) {
-    localStorage.setItem(VEHICLES_KEY, JSON.stringify(initialVehicles));
-  }
-  if (!localStorage.getItem(DRIVERS_KEY)) {
-    localStorage.setItem(DRIVERS_KEY, JSON.stringify(initialDrivers));
-  }
-  if (!localStorage.getItem(SETTINGS_KEY)) {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(initialSettings));
+
+  // Ensure demo storage has defaults if unauthenticated guest
+  if (!isAuthenticated()) {
+    if (getLocalItem(TRIPS_BASE_KEY) === null) setLocalItem(TRIPS_BASE_KEY, initialTrips);
+    if (getLocalItem(CUSTOMERS_BASE_KEY) === null) setLocalItem(CUSTOMERS_BASE_KEY, initialCustomers);
+    if (getLocalItem(VEHICLES_BASE_KEY) === null) setLocalItem(VEHICLES_BASE_KEY, initialVehicles);
+    if (getLocalItem(DRIVERS_BASE_KEY) === null) setLocalItem(DRIVERS_BASE_KEY, initialDrivers);
+    if (getLocalItem(SETTINGS_BASE_KEY) === null) setLocalItem(SETTINGS_BASE_KEY, initialSettings);
   }
 
   // Probe Server REST API
@@ -144,23 +194,23 @@ export async function syncFromServer() {
 
     if (tripsRes.ok) {
       const trips = await tripsRes.json();
-      localStorage.setItem(TRIPS_KEY, JSON.stringify(trips));
+      setLocalItem(TRIPS_BASE_KEY, trips);
     }
     if (custRes.ok) {
       const customers = await custRes.json();
-      localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+      setLocalItem(CUSTOMERS_BASE_KEY, customers);
     }
     if (vehRes.ok) {
       const vehicles = await vehRes.json();
-      localStorage.setItem(VEHICLES_KEY, JSON.stringify(vehicles));
+      setLocalItem(VEHICLES_BASE_KEY, vehicles);
     }
     if (drivRes.ok) {
       const drivers = await drivRes.json();
-      localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
+      setLocalItem(DRIVERS_BASE_KEY, drivers);
     }
     if (setRes.ok) {
       const settings = await setRes.json();
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      setLocalItem(SETTINGS_BASE_KEY, settings);
     }
   } catch (e) {
     console.warn('Sync from server failed, relying on local cache:', e);
@@ -169,11 +219,11 @@ export async function syncFromServer() {
 
 // Reset data to initial sample dataset
 export async function resetToSampleData() {
-  localStorage.setItem(TRIPS_KEY, JSON.stringify(initialTrips));
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(initialCustomers));
-  localStorage.setItem(VEHICLES_KEY, JSON.stringify(initialVehicles));
-  localStorage.setItem(DRIVERS_KEY, JSON.stringify(initialDrivers));
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(initialSettings));
+  setLocalItem(TRIPS_BASE_KEY, initialTrips);
+  setLocalItem(CUSTOMERS_BASE_KEY, initialCustomers);
+  setLocalItem(VEHICLES_BASE_KEY, initialVehicles);
+  setLocalItem(DRIVERS_BASE_KEY, initialDrivers);
+  setLocalItem(SETTINGS_BASE_KEY, initialSettings);
 
   if (isServerOnline) {
     try {
@@ -188,12 +238,8 @@ export async function resetToSampleData() {
 // TRIPS CRUD
 // ==========================================================================
 export function getTrips() {
-  try {
-    const raw = localStorage.getItem(TRIPS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    return [];
-  }
+  const fallback = isAuthenticated() ? [] : initialTrips;
+  return getLocalItem(TRIPS_BASE_KEY, fallback) || [];
 }
 
 export async function saveTrip(tripData) {
@@ -231,7 +277,7 @@ export async function saveTrip(tripData) {
   }
 
   trips.unshift(newTrip);
-  localStorage.setItem(TRIPS_KEY, JSON.stringify(trips));
+  setLocalItem(TRIPS_BASE_KEY, trips);
   ensureCustomerExists(newTrip.customerName);
 
   if (isServerOnline) {
@@ -278,7 +324,7 @@ export async function updateTrip(tripId, updatedFields) {
   }
 
   trips[index] = updated;
-  localStorage.setItem(TRIPS_KEY, JSON.stringify(trips));
+  setLocalItem(TRIPS_BASE_KEY, trips);
   ensureCustomerExists(updated.customerName);
 
   if (isServerOnline) {
@@ -298,7 +344,7 @@ export async function updateTrip(tripId, updatedFields) {
 export async function deleteTrip(tripId) {
   const trips = getTrips();
   const filtered = trips.filter(t => t.id !== tripId);
-  localStorage.setItem(TRIPS_KEY, JSON.stringify(filtered));
+  setLocalItem(TRIPS_BASE_KEY, filtered);
 
   if (isServerOnline) {
     try {
@@ -315,12 +361,8 @@ export async function deleteTrip(tripId) {
 // CUSTOMERS CRUD
 // ==========================================================================
 export function getCustomers() {
-  try {
-    const raw = localStorage.getItem(CUSTOMERS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    return [];
-  }
+  const fallback = isAuthenticated() ? [] : initialCustomers;
+  return getLocalItem(CUSTOMERS_BASE_KEY, fallback) || [];
 }
 
 export async function saveCustomer(customerData) {
@@ -332,7 +374,7 @@ export async function saveCustomer(customerData) {
     existing.phone = customerData.phone || existing.phone;
     existing.city = customerData.city || existing.city;
     existing.gstin = customerData.gstin || existing.gstin;
-    localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+    setLocalItem(CUSTOMERS_BASE_KEY, customers);
     return existing;
   }
 
@@ -346,7 +388,7 @@ export async function saveCustomer(customerData) {
   };
 
   customers.push(newCust);
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+  setLocalItem(CUSTOMERS_BASE_KEY, customers);
 
   if (isServerOnline) {
     try {
@@ -372,7 +414,7 @@ export async function updateCustomer(customerId, updatedFields) {
     ...updatedFields
   };
 
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
+  setLocalItem(CUSTOMERS_BASE_KEY, customers);
 
   if (isServerOnline) {
     try {
@@ -391,7 +433,7 @@ export async function updateCustomer(customerId, updatedFields) {
 export async function deleteCustomer(customerId) {
   const customers = getCustomers();
   const filtered = customers.filter(c => c.id !== customerId);
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(filtered));
+  setLocalItem(CUSTOMERS_BASE_KEY, filtered);
 
   if (isServerOnline) {
     try {
@@ -417,12 +459,8 @@ function ensureCustomerExists(name) {
 // VEHICLES (FLEET) CRUD
 // ==========================================================================
 export function getVehicles() {
-  try {
-    const raw = localStorage.getItem(VEHICLES_KEY);
-    return raw ? JSON.parse(raw) : initialVehicles;
-  } catch (e) {
-    return initialVehicles;
-  }
+  const fallback = isAuthenticated() ? [] : initialVehicles;
+  return getLocalItem(VEHICLES_BASE_KEY, fallback) || [];
 }
 
 export async function saveVehicle(vehicleData) {
@@ -446,7 +484,7 @@ export async function saveVehicle(vehicleData) {
   };
 
   vehicles.push(newVeh);
-  localStorage.setItem(VEHICLES_KEY, JSON.stringify(vehicles));
+  setLocalItem(VEHICLES_BASE_KEY, vehicles);
 
   if (isServerOnline) {
     try {
@@ -473,7 +511,7 @@ export async function updateVehicle(vehicleId, updatedFields) {
     vehicleNumber: (updatedFields.vehicleNumber || vehicles[index].vehicleNumber).toUpperCase().trim()
   };
 
-  localStorage.setItem(VEHICLES_KEY, JSON.stringify(vehicles));
+  setLocalItem(VEHICLES_BASE_KEY, vehicles);
 
   if (isServerOnline) {
     try {
@@ -492,7 +530,7 @@ export async function updateVehicle(vehicleId, updatedFields) {
 export async function deleteVehicle(vehicleId) {
   const vehicles = getVehicles();
   const filtered = vehicles.filter(v => v.id !== vehicleId);
-  localStorage.setItem(VEHICLES_KEY, JSON.stringify(filtered));
+  setLocalItem(VEHICLES_BASE_KEY, filtered);
 
   if (isServerOnline) {
     try {
@@ -509,12 +547,8 @@ export async function deleteVehicle(vehicleId) {
 // DRIVERS & STAFF CRUD
 // ==========================================================================
 export function getDrivers() {
-  try {
-    const raw = localStorage.getItem(DRIVERS_KEY);
-    return raw ? JSON.parse(raw) : initialDrivers;
-  } catch (e) {
-    return initialDrivers;
-  }
+  const fallback = isAuthenticated() ? [] : initialDrivers;
+  return getLocalItem(DRIVERS_BASE_KEY, fallback) || [];
 }
 
 export async function saveDriver(driverData) {
@@ -532,7 +566,7 @@ export async function saveDriver(driverData) {
   };
 
   drivers.push(newDriver);
-  localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
+  setLocalItem(DRIVERS_BASE_KEY, drivers);
 
   if (isServerOnline) {
     try {
@@ -558,7 +592,7 @@ export async function updateDriver(driverId, updatedFields) {
     ...updatedFields
   };
 
-  localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
+  setLocalItem(DRIVERS_BASE_KEY, drivers);
 
   if (isServerOnline) {
     try {
@@ -586,7 +620,7 @@ export async function recordDriverAdvance(driverId, amount, type = 'advance') {
     drivers[index].advanceBalance = Math.max(0, currentBal - Number(amount));
   }
 
-  localStorage.setItem(DRIVERS_KEY, JSON.stringify(drivers));
+  setLocalItem(DRIVERS_BASE_KEY, drivers);
 
   if (isServerOnline) {
     try {
@@ -605,7 +639,7 @@ export async function recordDriverAdvance(driverId, amount, type = 'advance') {
 export async function deleteDriver(driverId) {
   const drivers = getDrivers();
   const filtered = drivers.filter(d => d.id !== driverId);
-  localStorage.setItem(DRIVERS_KEY, JSON.stringify(filtered));
+  setLocalItem(DRIVERS_BASE_KEY, filtered);
 
   if (isServerOnline) {
     try {
@@ -622,18 +656,21 @@ export async function deleteDriver(driverId) {
 // SETTINGS CRUD
 // ==========================================================================
 export function getSettings() {
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? JSON.parse(raw) : initialSettings;
-  } catch (e) {
-    return initialSettings;
-  }
+  const user = getCurrentUser();
+  const defaultSet = user ? {
+    ...initialSettings,
+    businessName: user.businessName || 'Transport Logistics',
+    ownerName: user.name || 'Fleet Owner',
+    email: user.email
+  } : initialSettings;
+
+  return getLocalItem(SETTINGS_BASE_KEY, defaultSet) || defaultSet;
 }
 
 export async function saveSettings(settingsData) {
   const current = getSettings();
   const updated = { ...current, ...settingsData };
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+  setLocalItem(SETTINGS_BASE_KEY, updated);
 
   if (isServerOnline) {
     try {
@@ -672,19 +709,19 @@ export async function importBackupJSON(jsonString) {
   try {
     const parsed = JSON.parse(jsonString);
     if (parsed.trips && Array.isArray(parsed.trips)) {
-      localStorage.setItem(TRIPS_KEY, JSON.stringify(parsed.trips));
+      setLocalItem(TRIPS_BASE_KEY, parsed.trips);
     }
     if (parsed.customers && Array.isArray(parsed.customers)) {
-      localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(parsed.customers));
+      setLocalItem(CUSTOMERS_BASE_KEY, parsed.customers);
     }
     if (parsed.vehicles && Array.isArray(parsed.vehicles)) {
-      localStorage.setItem(VEHICLES_KEY, JSON.stringify(parsed.vehicles));
+      setLocalItem(VEHICLES_BASE_KEY, parsed.vehicles);
     }
     if (parsed.drivers && Array.isArray(parsed.drivers)) {
-      localStorage.setItem(DRIVERS_KEY, JSON.stringify(parsed.drivers));
+      setLocalItem(DRIVERS_BASE_KEY, parsed.drivers);
     }
     if (parsed.settings && typeof parsed.settings === 'object') {
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed.settings));
+      setLocalItem(SETTINGS_BASE_KEY, parsed.settings);
     }
 
     if (isServerOnline) {
@@ -737,61 +774,228 @@ export async function getBackupHistory() {
 // USER AUTHENTICATION & ENROLLMENT (ANTI-BOT CAPTCHA & GOOGLE LOGIN)
 // ==========================================================================
 
+// Local client-side anti-bot security engine (zero-dependency fallback when offline)
+function generateClientCaptcha() {
+  // 100% visually distinct characters (no confusable pairs)
+  const chars = '34679ACDEFHKMNPRTWXY';
+  let code = '';
+  for (let i = 0; i < 5; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  const timestamp = Date.now();
+  let hash = 0;
+  const payload = `${code.toUpperCase()}:${timestamp}:transport_sec`;
+  for (let i = 0; i < payload.length; i++) {
+    hash = ((hash << 5) - hash + payload.charCodeAt(i)) | 0;
+  }
+  const token = `client:${timestamp}:${Math.abs(hash).toString(36)}`;
+
+  const width = 160;
+  const height = 48;
+  const colors = ['#047857', '#0369a1', '#b45309', '#7c3aed', '#c2410c', '#0f766e'];
+  let linesSvg = '';
+  for (let i = 0; i < 2; i++) {
+    const x1 = Math.floor(Math.random() * 20);
+    const y1 = Math.floor(Math.random() * height);
+    const x2 = Math.floor(width - Math.random() * 20);
+    const y2 = Math.floor(Math.random() * height);
+    const col = colors[i % colors.length];
+    linesSvg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${col}" stroke-width="1.2" stroke-opacity="0.25" />`;
+  }
+
+  let charsSvg = '';
+  for (let i = 0; i < code.length; i++) {
+    const x = 16 + i * 28;
+    const y = 33;
+    const rot = Math.floor(Math.random() * 10 - 5);
+    const col = colors[i % colors.length];
+    charsSvg += `<text x="${x}" y="${y}" font-family="'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="25" font-weight="800" fill="${col}" transform="rotate(${rot}, ${x + 8}, ${y - 8})">${code[i]}</text>`;
+  }
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background:#f8fafc; border-radius:6px; border:1px solid #cbd5e1; user-select:none; display:block;">
+    ${linesSvg}
+    ${charsSvg}
+  </svg>`;
+
+  let base64Svg = '';
+  try {
+    base64Svg = btoa(unescape(encodeURIComponent(svg)));
+  } catch (e) {
+    base64Svg = '';
+  }
+
+  return {
+    token,
+    rawSvg: svg,
+    svg: base64Svg ? `data:image/svg+xml;base64,${base64Svg}` : svg,
+    expiresIn: 900
+  };
+}
+
+function verifyClientCaptcha(token, answer) {
+  if (!token || !answer) return false;
+  const parts = token.split(':');
+  if (parts.length !== 3 || parts[0] !== 'client') return false;
+  const timestamp = parseInt(parts[1], 10);
+  if (isNaN(timestamp)) return false;
+  if (Date.now() - timestamp > 15 * 60 * 1000) return false;
+
+  const cleanAnswer = answer.trim().toUpperCase().replace(/[\s-]/g, '');
+  const payload = `${cleanAnswer}:${timestamp}:transport_sec`;
+  let hash = 0;
+  for (let i = 0; i < payload.length; i++) {
+    hash = ((hash << 5) - hash + payload.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36) === parts[2];
+}
+
 export async function fetchCaptcha() {
   try {
-    const res = await fetch('/api/auth/captcha');
+    const res = await apiFetch('/api/auth/captcha', { cache: 'no-store' });
     if (res.ok) {
-      return await res.json();
+      const data = await res.json();
+      if (data && (data.rawSvg || data.svg) && data.token) {
+        return data;
+      }
     }
   } catch (e) {
-    console.error('Fetch CAPTCHA error:', e);
+    console.warn('[Auth] Server CAPTCHA endpoint unreachable, using client security engine:', e);
   }
-  return null;
+  // Safe offline fallback
+  return generateClientCaptcha();
 }
 
 export async function registerUser({ name, businessName, email, password, captchaToken, captchaAnswer }) {
-  const res = await fetch('/api/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, businessName, email, password, captchaToken, captchaAnswer })
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.message || 'Registration failed');
+  if (!email || !email.includes('@')) {
+    throw new Error('A valid Email ID is required');
+  }
+  if (!password || password.length < 6) {
+    throw new Error('Password must be at least 6 characters long');
   }
 
-  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-  await syncFromServer();
+  // Attempt server registration first if online
+  if (isServerOnline) {
+    try {
+      const res = await apiFetch('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ name, businessName, email, password, captchaToken, captchaAnswer })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Registration failed');
+      }
+
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+      await syncFromServer();
+      notifyAuthListeners();
+      return data;
+    } catch (err) {
+      // If server responded with a known validation/duplicate error, rethrow it
+      if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network')) {
+        throw err;
+      }
+      console.warn('[Auth] Server registration unreachable, creating isolated local account:', err);
+    }
+  }
+
+  // Client-side / Offline Local Account Creation
+  const userId = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const localUser = {
+    id: userId,
+    _id: userId,
+    email: email.toLowerCase().trim(),
+    name: name.trim(),
+    businessName: businessName.trim() || 'Transport Logistics',
+    provider: 'local',
+    avatar: '',
+    createdAt: new Date().toISOString()
+  };
+  const localToken = 'local_' + btoa(unescape(encodeURIComponent(JSON.stringify(localUser))));
+
+  // Save to local user registry
+  try {
+    const usersRaw = localStorage.getItem('transport_ledger_local_users');
+    const localUsers = usersRaw ? JSON.parse(usersRaw) : [];
+    if (localUsers.some(u => u.email === localUser.email)) {
+      throw new Error('An account with this Email ID already exists. Please sign in instead.');
+    }
+    localUsers.push({ ...localUser, passwordHash: btoa(password) });
+    localStorage.setItem('transport_ledger_local_users', JSON.stringify(localUsers));
+  } catch (e) {
+    if (e.message && e.message.includes('already exists')) throw e;
+  }
+
+  localStorage.setItem(AUTH_TOKEN_KEY, localToken);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(localUser));
   notifyAuthListeners();
-  return data;
+  return { success: true, user: localUser, token: localToken };
 }
 
 export async function loginUser(email, password) {
-  const res = await fetch('/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password })
-  });
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.message || 'Invalid Email ID or Password');
+  if (!email || !password) {
+    throw new Error('Both Email ID and Password are required');
   }
 
-  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-  await syncFromServer();
-  notifyAuthListeners();
-  return data;
+  if (isServerOnline) {
+    try {
+      const res = await apiFetch('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Invalid Email ID or Password');
+      }
+
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+      await syncFromServer();
+      notifyAuthListeners();
+      return data;
+    } catch (err) {
+      if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network')) {
+        throw err;
+      }
+      console.warn('[Auth] Server login unreachable, checking local credentials:', err);
+    }
+  }
+
+  // Local Offline Login Check
+  try {
+    const usersRaw = localStorage.getItem('transport_ledger_local_users');
+    const localUsers = usersRaw ? JSON.parse(usersRaw) : [];
+    const matched = localUsers.find(u => u.email.toLowerCase() === email.toLowerCase().trim());
+    if (matched && matched.passwordHash === btoa(password)) {
+      const { passwordHash, ...safeUser } = matched;
+      const localToken = 'local_' + btoa(unescape(encodeURIComponent(JSON.stringify(safeUser))));
+      localStorage.setItem(AUTH_TOKEN_KEY, localToken);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(safeUser));
+      notifyAuthListeners();
+      return { success: true, user: safeUser, token: localToken };
+    }
+  } catch (e) {
+    console.warn('Local auth check error:', e);
+  }
+
+  throw new Error('Invalid Email ID or Password. Please check your credentials.');
 }
 
-export async function loginWithGoogle(googleProfile) {
-  const res = await fetch('/api/auth/google', {
+export async function loginWithGoogle(googleProfileOrCredential) {
+  let bodyPayload = {};
+  if (typeof googleProfileOrCredential === 'string') {
+    bodyPayload = { credential: googleProfileOrCredential };
+  } else if (googleProfileOrCredential && googleProfileOrCredential.credential) {
+    bodyPayload = { credential: googleProfileOrCredential.credential };
+  } else {
+    bodyPayload = googleProfileOrCredential || {};
+  }
+
+  const res = await apiFetch('/api/auth/google', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(googleProfile)
+    body: JSON.stringify(bodyPayload)
   });
 
   const data = await res.json();
@@ -809,13 +1013,6 @@ export async function loginWithGoogle(googleProfile) {
 export async function logoutUser() {
   localStorage.removeItem(AUTH_TOKEN_KEY);
   localStorage.removeItem(AUTH_USER_KEY);
-  // Reset cache to sample data
-  localStorage.setItem(TRIPS_KEY, JSON.stringify(initialTrips));
-  localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(initialCustomers));
-  localStorage.setItem(VEHICLES_KEY, JSON.stringify(initialVehicles));
-  localStorage.setItem(DRIVERS_KEY, JSON.stringify(initialDrivers));
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(initialSettings));
-  await syncFromServer();
   notifyAuthListeners();
 }
 

@@ -38,9 +38,7 @@ import {
   onAuthChange,
   registerUser,
   loginUser,
-  loginWithGoogle,
   logoutUser,
-  fetchCaptcha,
   sendBackupToEmail,
   getBackupHistory
 } from './storage.js';
@@ -126,11 +124,11 @@ function updateHeaderInfo() {
   const ownerEls = document.querySelectorAll('.biz-owner-text');
   const avatarEls = document.querySelectorAll('.business-avatar');
 
-  const displayName = user ? user.name : (state.settings.ownerName || 'Ramesh Sharma');
-  const displayBiz = user ? (user.businessName || state.settings.businessName) : (state.settings.businessName || 'Jai Hanuman Transport');
+  const displayName = user ? user.name : (state.settings.ownerName || 'Demo Transport');
+  const displayBiz = user ? (user.businessName || state.settings.businessName) : (state.settings.businessName || 'Demo Ledger');
 
   bizNameEls.forEach(el => el.textContent = displayBiz);
-  ownerEls.forEach(el => el.textContent = user ? `${displayName}` : displayName);
+  ownerEls.forEach(el => el.textContent = user ? `${displayName} (Cloud)` : `${displayName} (Guest)`);
 
   avatarEls.forEach(el => {
     if (user && user.avatar) {
@@ -141,6 +139,27 @@ function updateHeaderInfo() {
     }
   });
 
+  // Header quick Sign In button
+  const authBtn = document.getElementById('btn-header-auth');
+  if (authBtn) {
+    if (user) {
+      authBtn.style.display = 'none';
+    } else {
+      authBtn.style.display = 'inline-flex';
+      authBtn.onclick = () => switchTab('login');
+    }
+  }
+
+  // Sidebar and mobile nav labels
+  const navLoginLabel = document.getElementById('nav-login-label');
+  const mobileLoginLabel = document.getElementById('mobile-nav-login-label');
+  if (navLoginLabel) {
+    navLoginLabel.textContent = user ? `${user.name.split(' ')[0]} (Cloud)` : 'Login / Account';
+  }
+  if (mobileLoginLabel) {
+    mobileLoginLabel.textContent = user ? 'Account' : 'Login';
+  }
+
   const bizPills = document.querySelectorAll('.business-pill');
   bizPills.forEach(pill => {
     pill.classList.add('clickable');
@@ -149,7 +168,7 @@ function updateHeaderInfo() {
       if (user) {
         openProfileModal();
       } else {
-        openAuthModal('login');
+        switchTab('login');
       }
     };
   });
@@ -196,7 +215,8 @@ export function switchTab(tabName) {
     drivers: { title: 'Drivers & Kharacha', subtitle: 'Driver profiles, vehicle assignments & trip advance ledger' },
     customers: { title: 'Customer Directory', subtitle: 'Manage customer accounts, total business & pending dues' },
     reports: { title: 'Financial Reports', subtitle: 'Turnover, GST/RCM summary, diesel expenses & profit analytics' },
-    settings: { title: 'Business Settings', subtitle: 'Business profile, bank details, MongoDB cloud sync & backups' }
+    settings: { title: 'Business Settings', subtitle: 'Business profile, bank details, MongoDB cloud sync & backups' },
+    login: { title: 'Account & Cloud Storage', subtitle: 'Sign in or enroll to manage your isolated cloud ledger' }
   };
 
   if (titles[tabName]) {
@@ -314,6 +334,10 @@ function renderCurrentTab() {
       viewContainer.innerHTML = renderSettingsView();
       attachSettingsEvents();
       break;
+    case 'login':
+      viewContainer.innerHTML = renderLoginView();
+      attachLoginEvents();
+      break;
     default:
       viewContainer.innerHTML = renderDashboardView();
       initDashboardCharts();
@@ -328,6 +352,7 @@ function renderDashboardView() {
   const todayStr = getTodayString();
   const currentMonthStr = todayStr.substring(0, 7);
   const currentYearStr = todayStr.substring(0, 4);
+  const user = getCurrentUser();
 
   // Calculations
   let todayAmt = 0, todayTrips = 0;
@@ -393,6 +418,27 @@ function renderDashboardView() {
   const recentTrips = [...state.trips].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
 
   return `
+    ${!user ? `
+      <!-- Demo Guest Mode Banner -->
+      <div class="demo-alert-banner">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <span style="font-size:1.4rem;">🔔</span>
+          <div>
+            <strong>Previewing Demo Transport Ledger</strong>
+            <div style="font-size:0.82rem; margin-top:2px;">Sign in with Email ID or Google to save your real trips, vehicles &amp; customers permanently in your private cloud.</div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary btn-sm" onclick="window.switchTab('login')">
+            Sign In / Auto Login
+          </button>
+          <button class="btn btn-outline btn-sm" onclick="window.openAuthModal('register')">
+            New User Enroll
+          </button>
+        </div>
+      </div>
+    ` : ''}
+
     <!-- Top Metric Cards -->
     <div class="metrics-grid">
       <div class="metric-card">
@@ -607,7 +653,7 @@ function renderTripsView() {
 
   const netProfit = totalAmt - totalExp;
 
-  const customerOptions = state.customers.map(c => 
+  const customerOptions = state.customers.map(c =>
     `<option value="${escapeHtml(c.name)}" ${state.tripFilter.customer === c.name ? 'selected' : ''}>${escapeHtml(c.name)}</option>`
   ).join('');
 
@@ -1068,7 +1114,7 @@ function renderDriversView() {
   const totalDrivers = state.drivers.length;
   const onTripCount = state.drivers.filter(d => (d.status || '').toLowerCase() === 'on trip').length;
   const availableCount = state.drivers.filter(d => (d.status || '').toLowerCase() === 'available').length;
-  
+
   let totalAdvancePending = 0;
   state.drivers.forEach(d => {
     totalAdvancePending += (Number(d.advanceBalance) || 0);
@@ -1907,17 +1953,17 @@ function openTripModal(tripId = null) {
   const lrNo = existing ? existing.lrNumber : generateLRNumber(state.trips, state.settings.lrPrefix || 'LR-2026-');
 
   // Customer options
-  const custOptions = state.customers.map(c => 
+  const custOptions = state.customers.map(c =>
     `<option value="${escapeHtml(c.name)}" ${existing && existing.customerName === c.name ? 'selected' : ''}>${escapeHtml(c.name)}</option>`
   ).join('');
 
   // Vehicle options
-  const vehOptions = state.vehicles.map(v => 
+  const vehOptions = state.vehicles.map(v =>
     `<option value="${escapeHtml(v.vehicleNumber)}" ${existing && existing.vehicleNumber === v.vehicleNumber ? 'selected' : ''}>${escapeHtml(v.vehicleNumber)} (${escapeHtml(v.makeModel)})</option>`
   ).join('');
 
   // Driver options
-  const drivOptions = state.drivers.map(d => 
+  const drivOptions = state.drivers.map(d =>
     `<option value="${escapeHtml(d.name)}" ${existing && existing.driverName === d.name ? 'selected' : ''}>${escapeHtml(d.name)}</option>`
   ).join('');
 
@@ -2849,9 +2895,8 @@ function escapeHtml(str) {
 }
 
 /* ==========================================================================
-   9. AUTHENTICATION & ENROLLMENT MODAL (ANTI-BOT CAPTCHA & GOOGLE LOGIN)
+   9. AUTHENTICATION & ENROLLMENT MODAL
    ========================================================================== */
-let currentCaptcha = null;
 
 async function openAuthModal(initialTab = 'login') {
   let activeTab = initialTab;
@@ -2868,7 +2913,7 @@ async function openAuthModal(initialTab = 'login') {
               ${activeTab === 'login' ? 'Sign In to Transport Ledger' : 'New User Enrollment'}
             </h3>
             <p style="margin: 3px 0 0; font-size: 0.8rem; color: var(--slate-500);">
-              ${activeTab === 'login' ? 'Access your cloud-secured transport ledger' : 'Protected by Anti-Bot Verification & 256-bit PBKDF2'}
+              ${activeTab === 'login' ? 'Access your cloud-secured transport ledger' : 'Isolated and encrypted cloud ledger partition'}
             </p>
           </div>
           <button class="btn-close-modal" onclick="window.closeModal()">
@@ -2878,7 +2923,7 @@ async function openAuthModal(initialTab = 'login') {
 
         <div class="modal-body" style="padding-top: 14px;">
           <!-- Tab Navigation -->
-          <div class="auth-tabs">
+          <div class="auth-tabs" style="margin-bottom: 20px;">
             <button type="button" class="auth-tab ${activeTab === 'login' ? 'active' : ''}" id="tab-btn-login">
               Email ID Sign In
             </button>
@@ -2886,19 +2931,6 @@ async function openAuthModal(initialTab = 'login') {
               New User Enroll
             </button>
           </div>
-
-          <!-- Google Login One-Click Button -->
-          <button type="button" id="btn-google-auth" class="btn-google">
-            <svg width="18" height="18" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-            </svg>
-            ${activeTab === 'login' ? 'Sign in with Google' : 'Sign up with Google'}
-          </button>
-
-          <div class="auth-divider">or with email id</div>
 
           <!-- SIGN IN FORM -->
           ${activeTab === 'login' ? `
@@ -2925,54 +2957,29 @@ async function openAuthModal(initialTab = 'login') {
               </div>
             </form>
           ` : `
-            <!-- REGISTRATION FORM WITH ANTI-BOT CAPTCHA -->
+            <!-- REGISTRATION FORM -->
             <form id="form-auth-register">
-              <div class="form-group" style="margin-bottom: 12px;">
+              <div class="form-group" style="margin-bottom: 14px;">
                 <label class="form-label">Transport Business Name</label>
                 <input type="text" id="reg-biz-name" class="form-input" placeholder="e.g. Jai Hanuman Transport Co." required />
               </div>
 
-              <div class="form-group" style="margin-bottom: 12px;">
+              <div class="form-group" style="margin-bottom: 14px;">
                 <label class="form-label">Owner / Operator Name</label>
                 <input type="text" id="reg-name" class="form-input" placeholder="e.g. Ramesh Sharma" required />
               </div>
 
-              <div class="form-group" style="margin-bottom: 12px;">
+              <div class="form-group" style="margin-bottom: 14px;">
                 <label class="form-label">Email ID Address</label>
                 <input type="email" id="reg-email" class="form-input" placeholder="e.g. ramesh@transport.com" required autocomplete="email" />
               </div>
 
-              <div class="form-group" style="margin-bottom: 14px;">
+              <div class="form-group" style="margin-bottom: 18px;">
                 <label class="form-label">Create Password (min. 6 characters)</label>
                 <input type="password" id="reg-password" class="form-input" placeholder="••••••••" minlength="6" required autocomplete="new-password" />
               </div>
 
-              <!-- ANTI-BOT SECURITY CAPTCHA SECTION -->
-              <div style="background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: var(--radius-md); padding: 12px; margin-bottom: 16px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                  <span style="font-size: 0.78rem; font-weight: 700; color: #047857; text-transform: uppercase; letter-spacing: 0.05em; display:flex; align-items:center; gap:5px;">
-                    🛡️ Anti-Bot Security Verification
-                  </span>
-                  <button type="button" id="btn-refresh-captcha" class="btn-refresh-captcha" title="Load a new code">
-                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    Refresh Code
-                  </button>
-                </div>
-
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 8px;">
-                  <div id="captcha-image-wrapper" style="min-width: 160px; min-height: 48px; background: #fff; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
-                    <span style="font-size: 0.75rem; color: #94a3b8;">Loading CAPTCHA...</span>
-                  </div>
-                  <div style="flex: 1;">
-                    <input type="text" id="reg-captcha-answer" class="form-input" placeholder="Enter code" maxlength="6" style="font-weight: 700; letter-spacing: 2px; text-transform: uppercase; text-align: center; font-size: 1rem; padding: 10px 8px;" required autocomplete="off" />
-                  </div>
-                </div>
-                <div style="font-size: 0.72rem; color: #64748b;">
-                  Please enter the 5 characters shown above to verify human registration.
-                </div>
-              </div>
-
-              <button type="submit" id="btn-submit-register" class="btn btn-primary btn-block" style="padding: 12px;">
+              <button type="submit" id="btn-submit-register" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700; font-size: 1rem;">
                 Enroll &amp; Create Safe Ledger
               </button>
 
@@ -2996,7 +3003,6 @@ async function openAuthModal(initialTab = 'login') {
     document.getElementById('tab-btn-register')?.addEventListener('click', () => {
       activeTab = 'register';
       renderAuthModalContent();
-      loadNewCaptcha();
     });
 
     // Links to switch tabs
@@ -3004,7 +3010,6 @@ async function openAuthModal(initialTab = 'login') {
       e.preventDefault();
       activeTab = 'register';
       renderAuthModalContent();
-      loadNewCaptcha();
     });
     document.getElementById('link-goto-login')?.addEventListener('click', (e) => {
       e.preventDefault();
@@ -3026,24 +3031,6 @@ async function openAuthModal(initialTab = 'login') {
         }
       });
     }
-
-    // Google Login button
-    document.getElementById('btn-google-auth')?.addEventListener('click', async () => {
-      const email = prompt('Enter your Google Email ID to Sign In or Enroll:', 'sanjay.transport@gmail.com');
-      if (!email || !email.includes('@')) return;
-      const name = email.split('@')[0].replace(/[._]/g, ' ');
-      try {
-        await loginWithGoogle({
-          email: email.trim(),
-          name: name.charAt(0).toUpperCase() + name.slice(1),
-          googleId: 'goog_' + Date.now()
-        });
-        window.closeModal();
-        showToast(`Welcome back, ${email}!`, 'success');
-      } catch (err) {
-        showToast(err.message || 'Google Sign-In failed', 'error');
-      }
-    });
 
     // Login Form Submit
     document.getElementById('form-auth-login')?.addEventListener('submit', async (e) => {
@@ -3068,15 +3055,10 @@ async function openAuthModal(initialTab = 'login') {
     // Register Form Submit
     document.getElementById('form-auth-register')?.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (!currentCaptcha) {
-        showToast('CAPTCHA code not loaded. Please refresh.', 'error');
-        return;
-      }
       const businessName = document.getElementById('reg-biz-name').value.trim();
       const name = document.getElementById('reg-name').value.trim();
       const email = document.getElementById('reg-email').value.trim();
       const password = document.getElementById('reg-password').value;
-      const captchaAnswer = document.getElementById('reg-captcha-answer').value.trim();
 
       const submitBtn = document.getElementById('btn-submit-register');
       submitBtn.disabled = true;
@@ -3087,9 +3069,7 @@ async function openAuthModal(initialTab = 'login') {
           businessName,
           name,
           email,
-          password,
-          captchaToken: currentCaptcha.token,
-          captchaAnswer
+          password
         });
         window.closeModal();
         showToast(`Account successfully enrolled! Welcome ${name}`, 'success');
@@ -3097,32 +3077,8 @@ async function openAuthModal(initialTab = 'login') {
         showToast(err.message || 'Registration failed', 'error');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Enroll & Create Safe Ledger';
-        loadNewCaptcha();
       }
     });
-
-    // Refresh CAPTCHA button
-    document.getElementById('btn-refresh-captcha')?.addEventListener('click', () => {
-      loadNewCaptcha();
-    });
-
-    if (activeTab === 'register') {
-      loadNewCaptcha();
-    }
-  }
-
-  async function loadNewCaptcha() {
-    const wrapper = document.getElementById('captcha-image-wrapper');
-    if (wrapper) wrapper.innerHTML = '<span style="font-size:0.75rem; color:#94a3b8;">Loading...</span>';
-    currentCaptcha = await fetchCaptcha();
-    if (currentCaptcha && currentCaptcha.svg && wrapper) {
-      wrapper.innerHTML = `<img src="${currentCaptcha.svg}" alt="Anti-Bot Code" class="captcha-img" />`;
-      const input = document.getElementById('reg-captcha-answer');
-      if (input) {
-        input.value = '';
-        input.focus();
-      }
-    }
   }
 
   renderAuthModalContent();
@@ -3220,4 +3176,303 @@ function openProfileModal() {
 }
 
 window.openProfileModal = openProfileModal;
+
+/* ==========================================================================
+   10. DEDICATED LOGIN / CLOUD ACCOUNT VIEW
+   ========================================================================== */
+
+function renderLoginView() {
+  const user = getCurrentUser();
+  const s = state.settings;
+
+  if (user) {
+    return `
+      <div class="login-view-wrapper">
+        <div class="login-view-card">
+          <div style="text-align:center; margin-bottom:24px;">
+            <div style="width:68px; height:68px; border-radius:50%; background:linear-gradient(135deg, #059669, #047857); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:1.6rem; font-weight:800; box-shadow:0 4px 12px rgba(5, 150, 105, 0.25); margin-bottom:12px; overflow:hidden;">
+              ${user.avatar ? `<img src="${user.avatar}" alt="Avatar" style="width:100%; height:100%; object-fit:cover;" />` : (user.name ? user.name.substring(0, 2).toUpperCase() : 'TL')}
+            </div>
+            <h2 style="font-size:1.4rem; font-weight:800; margin:0 0 4px; color:var(--slate-900);">${escapeHtml(user.name || 'Fleet Operator')}</h2>
+            <div style="font-size:0.88rem; color:var(--slate-600); font-weight:500;">${escapeHtml(user.email)}</div>
+            <div style="margin-top:8px;">
+              <span class="auth-badge-pill" style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; font-size:0.78rem; font-weight:700;">
+                🔒 Isolated Cloud Ledger Active
+              </span>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:22px;">
+            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
+              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Business Profile</span>
+              <div style="font-size:0.95rem; font-weight:700; color:var(--slate-800); margin-top:2px;">${escapeHtml(user.businessName || s.businessName || 'Transport Co.')}</div>
+            </div>
+            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
+              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Cloud Storage</span>
+              <div style="font-size:0.95rem; font-weight:700; color:#059669; margin-top:2px;">MongoDB Atlas Synced</div>
+            </div>
+            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
+              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Trips Recorded</span>
+              <div style="font-size:1.15rem; font-weight:800; color:var(--slate-800); margin-top:2px;">${state.trips.length}</div>
+            </div>
+            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
+              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Vehicles &amp; Parties</span>
+              <div style="font-size:1.15rem; font-weight:800; color:var(--slate-800); margin-top:2px;">${state.vehicles.length + state.customers.length}</div>
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <button id="btn-login-view-send-backup" class="btn btn-primary" style="justify-content:center; padding:12px; gap:8px;">
+              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+              Send Current Backup to My Mail ID
+            </button>
+
+            <button onclick="window.switchTab('trips')" class="btn btn-secondary" style="justify-content:center; padding:11px;">
+              Go to Trip Register &amp; Accounts
+            </button>
+
+            <button id="btn-login-view-logout" class="btn btn-outline" style="justify-content:center; color:#dc2626; border-color:#fca5a5; padding:10px; margin-top:4px;">
+              Sign Out / Switch Account
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="login-view-wrapper">
+      <div class="login-view-card">
+        <div style="text-align: center; margin-bottom: 22px;">
+          <div style="width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 1.3rem; margin-bottom: 10px; box-shadow: 0 4px 10px rgba(5, 150, 105, 0.25);">
+            🚚
+          </div>
+          <h2 style="font-size: 1.35rem; font-weight: 800; margin: 0 0 6px; color: var(--slate-900);">Transport Cloud Access</h2>
+          <p style="font-size: 0.85rem; color: var(--slate-500); margin: 0; line-height: 1.4;">
+            Sign in to isolate and secure your transport business ledger in MongoDB Atlas cloud storage.
+          </p>
+        </div>
+
+        <!-- Tab Switcher -->
+        <div class="auth-tabs" style="margin-bottom: 18px;">
+          <button type="button" class="auth-tab active" id="tab-login-view-signin">
+            Email ID Sign In
+          </button>
+          <button type="button" class="auth-tab" id="tab-login-view-signup">
+            New User Enroll
+          </button>
+        </div>
+
+        <!-- Dynamic Feedback Alert -->
+        <div id="login-view-feedback" class="auth-form-feedback"></div>
+
+        <!-- 1. SIGN IN SECTION -->
+        <div id="section-view-signin">
+          <form id="form-view-login">
+            <div class="form-group" style="margin-bottom: 14px;">
+              <label class="form-label">Email ID Address</label>
+              <input type="email" id="view-login-email" class="form-input" placeholder="transport@gmail.com" required autocomplete="email" />
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <label class="form-label" style="margin:0;">Password</label>
+                <button type="button" id="btn-toggle-view-pwd" style="background:none; border:none; font-size:0.75rem; color:var(--primary-600); cursor:pointer; font-weight:600;">Show</button>
+              </div>
+              <input type="password" id="view-login-password" class="form-input" style="margin-top:6px;" placeholder="••••••••" required autocomplete="current-password" />
+            </div>
+
+            <button type="submit" id="btn-submit-view-login" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
+              Sign In to Transport Ledger
+            </button>
+
+            <div style="text-align: center; margin-top: 14px; font-size: 0.85rem; color: var(--slate-600);">
+              Don't have an account yet? <a href="#" id="link-view-goto-signup" style="color: var(--primary-700); font-weight: 700; text-decoration: none;">Enroll New Account</a>
+            </div>
+          </form>
+        </div>
+
+        <!-- 2. REGISTRATION SECTION -->
+        <div id="section-view-signup" style="display: none;">
+          <form id="form-view-register">
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label">Transport Business Name</label>
+              <input type="text" id="view-reg-biz" class="form-input" placeholder="e.g. Jai Hanuman Transport Co." required />
+            </div>
+
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label">Owner / Operator Name</label>
+              <input type="text" id="view-reg-name" class="form-input" placeholder="e.g. Ramesh Sharma" required />
+            </div>
+
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label">Email ID Address</label>
+              <input type="email" id="view-reg-email" class="form-input" placeholder="ramesh@transport.com" required autocomplete="email" />
+            </div>
+
+            <div class="form-group" style="margin-bottom: 18px;">
+              <label class="form-label">Create Password (min. 6 characters)</label>
+              <input type="password" id="view-reg-pwd" class="form-input" placeholder="••••••••" minlength="6" required autocomplete="new-password" />
+            </div>
+
+            <button type="submit" id="btn-submit-view-register" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
+              Enroll &amp; Create Safe Ledger
+            </button>
+
+            <div style="text-align: center; margin-top: 14px; font-size: 0.85rem; color: var(--slate-600);">
+              Already enrolled? <a href="#" id="link-view-goto-signin" style="color: var(--primary-700); font-weight: 700; text-decoration: none;">Sign In to Account</a>
+            </div>
+          </form>
+        </div>
+
+        <div style="margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--slate-200); text-align: center; font-size: 0.75rem; color: var(--slate-500); display: flex; align-items: center; justify-content: center; gap: 6px;">
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#059669"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+          <span>256-bit PBKDF2 Encryption • Multi-Tenant Isolated Cloud Partition</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function attachLoginEvents() {
+  const user = getCurrentUser();
+
+  if (user) {
+    document.getElementById('btn-login-view-send-backup')?.addEventListener('click', async () => {
+      const btn = document.getElementById('btn-login-view-send-backup');
+      btn.disabled = true;
+      btn.textContent = 'Securing & Sending...';
+      try {
+        await sendBackupToEmail(user.email);
+        showToast(`Backup sent to ${user.email}`, 'success');
+      } catch (err) {
+        showToast(err.message || 'Failed to dispatch backup', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send Current Backup to My Mail ID';
+      }
+    });
+
+    document.getElementById('btn-login-view-logout')?.addEventListener('click', async () => {
+      await logoutUser();
+      showToast('Signed out successfully', 'info');
+      switchTab('login');
+    });
+
+    return;
+  }
+
+  // Not logged in - Tab switching
+  const tabSignin = document.getElementById('tab-login-view-signin');
+  const tabSignup = document.getElementById('tab-login-view-signup');
+  const secSignin = document.getElementById('section-view-signin');
+  const secSignup = document.getElementById('section-view-signup');
+  const feedback = document.getElementById('login-view-feedback');
+
+  const setTab = (tab) => {
+    if (feedback) feedback.style.display = 'none';
+    if (tab === 'signin') {
+      tabSignin?.classList.add('active');
+      tabSignup?.classList.remove('active');
+      if (secSignin) secSignin.style.display = 'block';
+      if (secSignup) secSignup.style.display = 'none';
+    } else {
+      tabSignup?.classList.add('active');
+      tabSignin?.classList.remove('active');
+      if (secSignin) secSignin.style.display = 'none';
+      if (secSignup) secSignup.style.display = 'block';
+    }
+  };
+
+  tabSignin?.addEventListener('click', () => setTab('signin'));
+  tabSignup?.addEventListener('click', () => setTab('signup'));
+  document.getElementById('link-view-goto-signup')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setTab('signup');
+  });
+  document.getElementById('link-view-goto-signin')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    setTab('signin');
+  });
+
+  // Password visibility toggle
+  const toggleBtn = document.getElementById('btn-toggle-view-pwd');
+  const pwdInput = document.getElementById('view-login-password');
+  if (toggleBtn && pwdInput) {
+    toggleBtn.addEventListener('click', () => {
+      if (pwdInput.type === 'password') {
+        pwdInput.type = 'text';
+        toggleBtn.textContent = 'Hide';
+      } else {
+        pwdInput.type = 'password';
+        toggleBtn.textContent = 'Show';
+      }
+    });
+  }
+
+  // Sign In Form Submit
+  document.getElementById('form-view-login')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('view-login-email').value.trim();
+    const password = document.getElementById('view-login-password').value;
+    const submitBtn = document.getElementById('btn-submit-view-login');
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Verifying credentials...';
+    if (feedback) { feedback.style.display = 'none'; feedback.className = 'auth-form-feedback'; }
+
+    try {
+      await loginUser(email, password);
+      showToast(`Signed in successfully as ${email}`, 'success');
+      switchTab('dashboard');
+    } catch (err) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Sign In to Transport Ledger';
+      if (feedback) {
+        feedback.className = 'auth-form-feedback error';
+        feedback.textContent = err.message || 'Invalid Email ID or Password';
+        feedback.style.display = 'block';
+      }
+      showToast(err.message || 'Sign in failed', 'error');
+    }
+  });
+
+  // Register Form Submit (Direct & Reliable)
+  document.getElementById('form-view-register')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const businessName = document.getElementById('view-reg-biz').value.trim();
+    const name = document.getElementById('view-reg-name').value.trim();
+    const email = document.getElementById('view-reg-email').value.trim();
+    const password = document.getElementById('view-reg-pwd').value;
+    const submitBtn = document.getElementById('btn-submit-view-register');
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Enrolling Account...';
+    if (feedback) { feedback.style.display = 'none'; feedback.className = 'auth-form-feedback'; }
+
+    try {
+      await registerUser({
+        businessName,
+        name,
+        email,
+        password
+      });
+      showToast(`Account successfully enrolled! Welcome ${name}`, 'success');
+      switchTab('dashboard');
+    } catch (err) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Enroll & Create Safe Ledger';
+      if (feedback) {
+        feedback.className = 'auth-form-feedback error';
+        feedback.textContent = err.message || 'Registration failed';
+        feedback.style.display = 'block';
+      }
+      showToast(err.message || 'Registration failed', 'error');
+    }
+  });
+}
+
+window.renderLoginView = renderLoginView;
+window.attachLoginEvents = attachLoginEvents;
+
 
