@@ -1,12 +1,47 @@
+<#
+  Transport Ledger - PowerShell Server Launcher & Fallback Runner
+  Automatically detects Node.js runtime and launches the Enterprise REST API server.
+  If Node.js is not present, runs a native PowerShell static file server.
+#>
+
 $port = 8080
-$path = "C:\Users\es330\.gemini\antigravity\scratch\transport-ledger"
+$rootPath = $PSScriptRoot
+
+Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "  Transport Ledger - Launcher" -ForegroundColor Green
+Write-Host "  Directory: $rootPath" -ForegroundColor Gray
+Write-Host "================================================================" -ForegroundColor Cyan
+
+# Check for Node.js
+$nodeInstalled = $false
+try {
+    $nodeVersion = node -v 2>$null
+    if ($LASTEXITCODE -eq 0 -and $nodeVersion) {
+        $nodeInstalled = $true
+    }
+} catch {
+    $nodeInstalled = $false
+}
+
+if ($nodeInstalled) {
+    Write-Host "Node.js detected ($nodeVersion). Starting full REST API server (server.js)..." -ForegroundColor Yellow
+    Push-Location $rootPath
+    try {
+        & node server.js
+    } finally {
+        Pop-Location
+    }
+    exit
+}
+
+Write-Host "Node.js not detected on PATH. Starting native PowerShell HTTP listener..." -ForegroundColor Yellow
 
 $endpoint = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, $port)
 $tcpListener = New-Object System.Net.Sockets.TcpListener($endpoint)
 $tcpListener.Start()
 
-Write-Host "Transport Ledger Server listening on all interfaces on port $port!"
-Write-Host "Mobile Access URL: http://172.16.20.12:$port/"
+Write-Host "PowerShell Server listening on all interfaces on port $port!" -ForegroundColor Green
+Write-Host "Local URL: http://localhost:$port/" -ForegroundColor Cyan
 
 try {
     while ($true) {
@@ -31,19 +66,22 @@ try {
                 $urlPath = $urlPath.Substring(0, $urlPath.IndexOf("?"))
             }
 
-            $localPath = Join-Path $path $urlPath.TrimStart("/").Replace("/", "\")
+            $localPath = Join-Path $rootPath $urlPath.TrimStart("/").Replace("/", "\")
 
             if (Test-Path $localPath -PathType Leaf) {
                 $bytes = [System.IO.File]::ReadAllBytes($localPath)
                 $ext = [System.IO.Path]::GetExtension($localPath).ToLower()
 
-                $contentType = "text/plain"
+                $contentType = "application/octet-stream"
                 switch ($ext) {
                     ".html" { $contentType = "text/html; charset=utf-8" }
                     ".css"  { $contentType = "text/css; charset=utf-8" }
                     ".js"   { $contentType = "application/javascript; charset=utf-8" }
                     ".json" { $contentType = "application/json; charset=utf-8" }
                     ".svg"  { $contentType = "image/svg+xml" }
+                    ".png"  { $contentType = "image/png" }
+                    ".jpg"  { $contentType = "image/jpeg" }
+                    ".webp" { $contentType = "image/webp" }
                 }
 
                 $header = "HTTP/1.1 200 OK`r`n" +

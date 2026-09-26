@@ -1,17 +1,69 @@
 /**
- * Main Application Logic & Event Controller for Transport Ledger
- * Integrated with WhatsApp Reminders, Trip Expense Tracker, and Printable LR/Invoice Receipts.
+ * Transport Ledger - Main Application Logic & View Controller
+ * Enterprise Indian Transport Business Ledger, Fleet Management & Freight Accounting System
+ * With MongoDB Atlas cloud sync, vehicle document compliance tracking,
+ * driver Kharacha advance ledger, dynamic UPI QR payments, and printable LR receipts.
  */
 
-import { initStorage, getTrips, saveTrip, updateTrip, deleteTrip, getCustomers, saveCustomer, updateCustomer, deleteCustomer, getSettings, saveSettings, exportBackupJSON, importBackupJSON, resetToSampleData } from './storage.js';
-import { formatRupee, formatDate, formatDateInput, getTodayString, exportTripsToCSV, exportCustomerLedgerToCSV, generateWhatsAppReminderLink } from './utils.js';
-import { renderMonthlyIncomeChart, renderTopCustomersChart, renderPaymentStatusChart } from './charts.js';
+import {
+  initStorage,
+  getTrips,
+  saveTrip,
+  updateTrip,
+  deleteTrip,
+  getCustomers,
+  saveCustomer,
+  updateCustomer,
+  deleteCustomer,
+  getVehicles,
+  saveVehicle,
+  updateVehicle,
+  deleteVehicle,
+  getDrivers,
+  saveDriver,
+  updateDriver,
+  deleteDriver,
+  recordDriverAdvance,
+  getSettings,
+  saveSettings,
+  exportBackupJSON,
+  importBackupJSON,
+  resetToSampleData,
+  getSyncStatus,
+  onSyncStatusChange,
+  triggerSync,
+  fetchAnalytics
+} from './storage.js';
+
+import {
+  formatRupee,
+  formatDate,
+  formatDateInput,
+  getTodayString,
+  checkDocumentExpiry,
+  generateLRNumber,
+  generateUpiPayLink,
+  generateUpiQrCodeUrl,
+  generateWhatsAppReminderLink,
+  exportTripsToCSV,
+  exportCustomerLedgerToCSV,
+  exportVehiclesToCSV,
+  exportDriversToCSV
+} from './utils.js';
+
+import {
+  renderMonthlyIncomeChart,
+  renderTopCustomersChart,
+  renderPaymentStatusChart
+} from './charts.js';
 
 // Application State
 const state = {
   currentTab: 'dashboard',
   trips: [],
   customers: [],
+  vehicles: [],
+  drivers: [],
   settings: {},
   tripFilter: {
     search: '',
@@ -19,23 +71,36 @@ const state = {
     status: 'all',
     dateRange: 'all' // all, today, month, year
   },
+  vehicleFilter: {
+    search: '',
+    ownership: 'all'
+  },
+  driverFilter: {
+    search: '',
+    status: 'all'
+  },
   editingTripId: null,
   editingCustomerId: null,
+  editingVehicleId: null,
+  editingDriverId: null,
   viewingCustomerStatement: null
 };
 
 // Initialize Application on DOM Ready
-document.addEventListener('DOMContentLoaded', () => {
-  initStorage();
+document.addEventListener('DOMContentLoaded', async () => {
+  await initStorage();
   loadState();
   setupNavigation();
   setupGlobalEvents();
+  setupSyncMonitoring();
   renderCurrentTab();
 });
 
 function loadState() {
   state.trips = getTrips();
   state.customers = getCustomers();
+  state.vehicles = getVehicles();
+  state.drivers = getDrivers();
   state.settings = getSettings();
   updateHeaderInfo();
 }
@@ -66,7 +131,7 @@ function setupNavigation() {
   });
 }
 
-function switchTab(tabName) {
+export function switchTab(tabName) {
   state.currentTab = tabName;
 
   // Update Nav Active States
@@ -78,16 +143,18 @@ function switchTab(tabName) {
     }
   });
 
-  // Update Page Title
+  // Update Page Title & Subtitle
   const titleEl = document.getElementById('page-title');
   const subtitleEl = document.getElementById('page-subtitle');
 
   const titles = {
-    dashboard: { title: 'Dashboard', subtitle: 'Overview of daily trips, collections & customer business' },
+    dashboard: { title: 'Dashboard', subtitle: 'Overview of daily trips, collections & fleet compliance' },
     trips: { title: 'Trip Register', subtitle: 'All transport trips, route details, and payment statuses' },
+    vehicles: { title: 'Fleet & Vehicles', subtitle: 'Vehicle compliance, document expiry dates & profitability' },
+    drivers: { title: 'Drivers & Kharacha', subtitle: 'Driver profiles, vehicle assignments & trip advance ledger' },
     customers: { title: 'Customer Directory', subtitle: 'Manage customer accounts, total business & pending dues' },
-    reports: { title: 'Financial Reports', subtitle: 'Daily, Monthly, Yearly income analytics & visual charts' },
-    settings: { title: 'Business Settings', subtitle: 'Business profile details, backup & data management' }
+    reports: { title: 'Financial Reports', subtitle: 'Turnover, GST/RCM summary, diesel expenses & profit analytics' },
+    settings: { title: 'Business Settings', subtitle: 'Business profile, bank details, MongoDB cloud sync & backups' }
   };
 
   if (titles[tabName]) {
@@ -96,6 +163,78 @@ function switchTab(tabName) {
   }
 
   renderCurrentTab();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+window.switchTab = switchTab;
+
+function setupSyncMonitoring() {
+  const syncPill = document.getElementById('header-sync-pill');
+  const syncText = document.getElementById('sync-status-text');
+  const mobileSync = document.getElementById('mobile-sync-indicator');
+
+  const updateUI = ({ isServerOnline, serverInfo }) => {
+    if (isServerOnline) {
+      const isMongo = serverInfo.database && serverInfo.database.isMongo;
+      const label = isMongo ? 'MongoDB: Cloud Connected' : 'Server: Local Synced';
+
+      if (syncPill) {
+        syncPill.className = 'sync-pill online';
+        syncPill.title = isMongo ? 'Connected to MongoDB Atlas Database' : 'Connected to Local File Database';
+      }
+      if (syncText) syncText.textContent = label;
+      if (mobileSync) {
+        mobileSync.className = 'sync-pill online';
+        mobileSync.title = label;
+      }
+    } else {
+      if (syncPill) {
+        syncPill.className = 'sync-pill offline';
+        syncPill.title = 'Offline mode: operating from local browser cache';
+      }
+      if (syncText) syncText.textContent = 'Offline: Local Cache';
+      if (mobileSync) {
+        mobileSync.className = 'sync-pill offline';
+        mobileSync.title = 'Offline Cache';
+      }
+    }
+  };
+
+  onSyncStatusChange(updateUI);
+  updateUI(getSyncStatus());
+}
+
+function setupGlobalEvents() {
+  // Theme Toggle Button
+  const themeToggle = document.getElementById('btn-theme-toggle');
+  const mobileThemeToggle = document.getElementById('btn-mobile-theme');
+
+  const toggleTheme = () => {
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', newTheme);
+    localStorage.setItem('transport_ledger_theme', newTheme);
+  };
+
+  const savedTheme = localStorage.getItem('transport_ledger_theme');
+  if (savedTheme) {
+    document.documentElement.setAttribute('data-theme', savedTheme);
+  }
+
+  if (themeToggle) themeToggle.addEventListener('click', toggleTheme);
+  if (mobileThemeToggle) mobileThemeToggle.addEventListener('click', toggleTheme);
+
+  // LAN Access & Diagnostics Button
+  const mobileAccessBtn = document.getElementById('btn-mobile-access');
+  if (mobileAccessBtn) {
+    mobileAccessBtn.addEventListener('click', openDiagnosticsModal);
+  }
+
+  const syncPill = document.getElementById('header-sync-pill');
+  if (syncPill) {
+    syncPill.addEventListener('click', openDiagnosticsModal);
+    syncPill.style.cursor = 'pointer';
+  }
 }
 
 function renderCurrentTab() {
@@ -106,10 +245,19 @@ function renderCurrentTab() {
     case 'dashboard':
       viewContainer.innerHTML = renderDashboardView();
       initDashboardCharts();
+      attachDashboardEvents();
       break;
     case 'trips':
       viewContainer.innerHTML = renderTripsView();
       attachTripEvents();
+      break;
+    case 'vehicles':
+      viewContainer.innerHTML = renderVehiclesView();
+      attachVehicleEvents();
+      break;
+    case 'drivers':
+      viewContainer.innerHTML = renderDriversView();
+      attachDriverEvents();
       break;
     case 'customers':
       viewContainer.innerHTML = renderCustomersView();
@@ -118,6 +266,7 @@ function renderCurrentTab() {
     case 'reports':
       viewContainer.innerHTML = renderReportsView();
       initReportCharts();
+      attachReportsEvents();
       break;
     case 'settings':
       viewContainer.innerHTML = renderSettingsView();
@@ -126,6 +275,7 @@ function renderCurrentTab() {
     default:
       viewContainer.innerHTML = renderDashboardView();
       initDashboardCharts();
+      attachDashboardEvents();
   }
 }
 
@@ -170,6 +320,33 @@ function renderDashboardView() {
 
   const monthProfit = monthAmt - monthExpenses;
   const activeCustCount = state.customers.length;
+  const totalVehiclesCount = state.vehicles.length;
+  const activeVehiclesCount = state.vehicles.filter(v => (v.status || 'Active').toLowerCase() === 'active').length;
+
+  // Scan expiring vehicle compliance documents
+  const expiringDocs = [];
+  state.vehicles.forEach(v => {
+    const checks = [
+      { doc: 'Fitness', date: v.fitnessExpiry },
+      { doc: 'Insurance', date: v.insuranceExpiry },
+      { doc: 'Permit', date: v.permitExpiry },
+      { doc: 'PUC', date: v.pucExpiry }
+    ];
+    checks.forEach(({ doc, date }) => {
+      if (date) {
+        const info = checkDocumentExpiry(date);
+        if (info.status === 'expired' || info.status === 'expiring') {
+          expiringDocs.push({
+            vehicleNumber: v.vehicleNumber,
+            doc,
+            date,
+            status: info.status,
+            label: info.label
+          });
+        }
+      }
+    });
+  });
 
   const recentTrips = [...state.trips].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
 
@@ -178,7 +355,7 @@ function renderDashboardView() {
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-title">Today's Collection</span>
+          <span class="metric-title">Today's Freight</span>
           <div class="metric-icon-box">
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
           </div>
@@ -189,7 +366,7 @@ function renderDashboardView() {
 
       <div class="metric-card">
         <div class="metric-header">
-          <span class="metric-title">This Month Net Profit</span>
+          <span class="metric-title">This Month Profit</span>
           <div class="metric-icon-box">
             <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
           </div>
@@ -200,13 +377,13 @@ function renderDashboardView() {
 
       <div class="metric-card card-blue">
         <div class="metric-header">
-          <span class="metric-title">This Year Income</span>
+          <span class="metric-title">Fleet Strength</span>
           <div class="metric-icon-box">
-            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" /></svg>
           </div>
         </div>
-        <div class="metric-value">${formatRupee(yearAmt)}</div>
-        <div class="metric-sub">${yearTrips} trip${yearTrips !== 1 ? 's' : ''} in ${currentYearStr}</div>
+        <div class="metric-value">${activeVehiclesCount} / ${totalVehiclesCount}</div>
+        <div class="metric-sub">Active trucks running on routes</div>
       </div>
 
       <div class="metric-card card-orange">
@@ -221,16 +398,43 @@ function renderDashboardView() {
       </div>
     </div>
 
+    <!-- Expiring Documents Alert Banner (If Any) -->
+    ${expiringDocs.length > 0 ? `
+      <div style="background: #fff7ed; border: 1.5px solid #fed7aa; border-radius: var(--radius-md); padding: 16px 20px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <div style="width: 40px; height: 40px; border-radius: 50%; background: #ea580c; color: #ffffff; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+            <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          </div>
+          <div>
+            <h4 style="font-size: 1rem; font-weight: 700; color: #9a3412;">Document Compliance Alert: ${expiringDocs.length} Action${expiringDocs.length > 1 ? 's' : ''} Needed</h4>
+            <p style="font-size: 0.84rem; color: #c2410c; margin-top: 2px;">
+              ${expiringDocs.slice(0, 3).map(d => `<strong>${d.vehicleNumber}</strong> (${d.doc}: ${d.label})`).join(' • ')}
+              ${expiringDocs.length > 3 ? ` and ${expiringDocs.length - 3} more...` : ''}
+            </p>
+          </div>
+        </div>
+        <button class="btn btn-orange btn-sm" onclick="window.switchTab('vehicles')">
+          View Fleet Compliance
+        </button>
+      </div>
+    ` : ''}
+
     <!-- Quick Action Banner -->
     <div class="quick-action-banner">
       <div class="qa-text">
-        <h3>Record Transport Trips & Expenses</h3>
-        <p>Keep track of routes, diesel costs, driver salary, Lorry Receipts, and WhatsApp payment reminders.</p>
+        <h3>Enterprise Transport Operations</h3>
+        <p>Record daily lorry receipts, track diesel and toll expenses, disburse driver Kharacha advances, and share instant UPI invoices.</p>
       </div>
-      <div class="qa-buttons">
+      <div class="qa-buttons" style="display: flex; gap: 10px; flex-wrap: wrap;">
         <button class="btn btn-orange action-add-trip">
           <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
-          Add New Trip
+          Add Trip
+        </button>
+        <button class="btn btn-secondary action-add-vehicle" style="background:#ffffff; color:var(--slate-800);">
+          + Add Truck
+        </button>
+        <button class="btn btn-secondary action-add-driver" style="background:#ffffff; color:var(--slate-800);">
+          + Add Driver
         </button>
       </div>
     </div>
@@ -282,6 +486,14 @@ function renderDashboardView() {
       </div>
     </div>
   `;
+}
+
+function attachDashboardEvents() {
+  const addVehBtn = document.querySelector('.action-add-vehicle');
+  if (addVehBtn) addVehBtn.addEventListener('click', () => openVehicleModal());
+
+  const addDrivBtn = document.querySelector('.action-add-driver');
+  if (addDrivBtn) addDrivBtn.addEventListener('click', () => openDriverModal());
 }
 
 function initDashboardCharts() {
@@ -339,7 +551,6 @@ function renderRecentTripsTable(trips) {
 function renderTripsView() {
   const filtered = filterTrips(state.trips, state.tripFilter);
 
-  // Filter totals
   let totalAmt = 0, paidAmt = 0, pendingAmt = 0, totalExp = 0;
   filtered.forEach(t => {
     const amt = Number(t.amount) || 0;
@@ -363,7 +574,7 @@ function renderTripsView() {
     <div class="toolbar-card">
       <div class="search-box">
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-        <input type="text" id="trip-search-input" placeholder="Search by customer, vehicle number, or location..." value="${escapeHtml(state.tripFilter.search)}" />
+        <input type="text" id="trip-search-input" placeholder="Search customer, vehicle number, route, LR no..." value="${escapeHtml(state.tripFilter.search)}" />
       </div>
 
       <div class="filter-group">
@@ -398,8 +609,8 @@ function renderTripsView() {
       </div>
     </div>
 
-    <!-- Filter Summary Pill Bar -->
-    <div style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; background: #ffffff; padding: 14px 20px; border-radius: var(--radius-md); border: 1px solid var(--slate-200);">
+    <!-- Summary Pill Bar -->
+    <div style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; background: var(--card-bg); padding: 14px 20px; border-radius: var(--radius-md); border: 1px solid var(--slate-200);">
       <div style="font-size: 0.9rem; font-weight: 600; color: var(--slate-700);">
         Showing <strong>${filtered.length}</strong> trip${filtered.length !== 1 ? 's' : ''}
       </div>
@@ -416,13 +627,13 @@ function renderTripsView() {
       <table class="data-table">
         <thead>
           <tr>
-            <th>Date</th>
-            <th>Customer</th>
+            <th>Date & LR No</th>
+            <th>Customer & Consignee</th>
             <th>Route</th>
-            <th>Vehicle No</th>
+            <th>Vehicle & Driver</th>
             <th>Freight & Expenses</th>
-            <th>Payment Status</th>
-            <th>Notes / Goods</th>
+            <th>Status</th>
+            <th>Goods / Notes</th>
             <th style="text-align: right;">Actions</th>
           </tr>
         </thead>
@@ -439,7 +650,7 @@ function renderTripTableRows(trips) {
     return `
       <tr>
         <td colspan="8" style="text-align: center; padding: 40px 20px; color: var(--slate-500);">
-          No matching trips found. Try clearing search filters or add a new trip.
+          No matching trips found. Try clearing search filters or record a new trip.
         </td>
       </tr>
     `;
@@ -451,12 +662,18 @@ function renderTripTableRows(trips) {
     const pending = t.amount - (t.paidAmount || (t.status === 'Paid' ? t.amount : 0));
     const totalExp = (Number(t.fuelCost) || 0) + (Number(t.driverCost) || 0) + (Number(t.tollCost) || 0) + (Number(t.otherExpense) || 0);
 
-    const waUrl = pending > 0 ? generateWhatsAppReminderLink(phone, t.customerName, pending, t, state.settings.businessName) : null;
+    const waUrl = pending > 0 ? generateWhatsAppReminderLink(phone, t.customerName, pending, t, state.settings) : null;
 
     return `
       <tr>
-        <td><strong>${formatDate(t.date)}</strong></td>
-        <td class="trip-customer-name">${escapeHtml(t.customerName)}</td>
+        <td>
+          <strong>${formatDate(t.date)}</strong>
+          <div style="font-family: monospace; font-size: 0.78rem; color: var(--slate-500);">${escapeHtml(t.lrNumber || '-')}</div>
+        </td>
+        <td class="trip-customer-name">
+          <strong>${escapeHtml(t.customerName)}</strong>
+          ${t.consignee ? `<div style="font-size: 0.76rem; color: var(--slate-500);">To: ${escapeHtml(t.consignee)}</div>` : ''}
+        </td>
         <td>
           <div class="trip-route">
             <span>${escapeHtml(t.fromLocation)}</span>
@@ -464,16 +681,22 @@ function renderTripTableRows(trips) {
             <span>${escapeHtml(t.toLocation)}</span>
           </div>
         </td>
-        <td><span class="vehicle-tag">${escapeHtml(t.vehicleNumber)}</span></td>
+        <td>
+          <span class="vehicle-tag">${escapeHtml(t.vehicleNumber)}</span>
+          ${t.driverName ? `<div style="font-size: 0.76rem; color: var(--slate-500); margin-top: 2px;">${escapeHtml(t.driverName)}</div>` : ''}
+        </td>
         <td>
           <div><strong>${formatRupee(t.amount)}</strong></div>
           ${totalExp > 0 ? `<div style="font-size:0.75rem; color:#64748b;">Exp: ${formatRupee(totalExp)} (Profit: ${formatRupee(t.amount - totalExp)})</div>` : ''}
         </td>
-        <td><span class="badge-status badge-${t.status.toLowerCase()}">${t.status}</span></td>
-        <td style="max-width: 200px; font-size: 0.82rem; color: var(--slate-600);">${escapeHtml(t.notes || '-')}</td>
+        <td>
+          <span class="badge-status badge-${t.status.toLowerCase()}">${t.status}</span>
+          ${pending > 0 ? `<div style="font-size:0.75rem; color:#c2410c; margin-top:2px;">Due: ${formatRupee(pending)}</div>` : ''}
+        </td>
+        <td style="max-width: 180px; font-size: 0.82rem; color: var(--slate-600);">${escapeHtml(t.notes || '-')}</td>
         <td style="text-align: right; white-space: nowrap;">
-          ${waUrl ? `<a href="${waUrl}" target="_blank" class="btn btn-whatsapp btn-sm" style="margin-right: 4px; padding: 5px 8px;" title="Send WhatsApp Payment Reminder">WA</a>` : ''}
-          <button class="btn btn-secondary btn-sm btn-print-lr" data-id="${t.id}" style="margin-right: 4px;">Receipt</button>
+          ${waUrl ? `<a href="${waUrl}" target="_blank" class="btn btn-whatsapp btn-sm" style="margin-right: 4px; padding: 5px 8px;" title="Send WhatsApp Bill & Reminder">WA</a>` : ''}
+          <button class="btn btn-secondary btn-sm btn-print-lr" data-id="${t.id}" style="margin-right: 4px;" title="Print LR & Invoice">LR</button>
           <button class="btn btn-secondary btn-sm btn-edit-trip" data-id="${t.id}" style="margin-right: 4px;">Edit</button>
           <button class="btn btn-secondary btn-sm btn-delete-trip" data-id="${t.id}" style="color: #dc2626;">Del</button>
         </td>
@@ -488,36 +711,21 @@ function filterTrips(trips, filter) {
   const currentYearStr = todayStr.substring(0, 4);
 
   return trips.filter(t => {
-    // Search query
     if (filter.search) {
       const q = filter.search.toLowerCase();
-      const matchCust = t.customerName.toLowerCase().includes(q);
-      const matchVeh = t.vehicleNumber.toLowerCase().includes(q);
+      const matchCust = (t.customerName || '').toLowerCase().includes(q);
+      const matchVeh = (t.vehicleNumber || '').toLowerCase().includes(q);
       const matchRoute = `${t.fromLocation} ${t.toLocation}`.toLowerCase().includes(q);
+      const matchLR = (t.lrNumber || '').toLowerCase().includes(q);
       const matchNotes = (t.notes || '').toLowerCase().includes(q);
-      if (!matchCust && !matchVeh && !matchRoute && !matchNotes) return false;
+      if (!matchCust && !matchVeh && !matchRoute && !matchLR && !matchNotes) return false;
     }
 
-    // Customer
-    if (filter.customer !== 'all' && t.customerName !== filter.customer) {
-      return false;
-    }
-
-    // Status
-    if (filter.status !== 'all' && t.status !== filter.status) {
-      return false;
-    }
-
-    // Date Range
-    if (filter.dateRange === 'today' && t.date !== todayStr) {
-      return false;
-    }
-    if (filter.dateRange === 'month' && (!t.date || !t.date.startsWith(currentMonthStr))) {
-      return false;
-    }
-    if (filter.dateRange === 'year' && (!t.date || !t.date.startsWith(currentYearStr))) {
-      return false;
-    }
+    if (filter.customer !== 'all' && t.customerName !== filter.customer) return false;
+    if (filter.status !== 'all' && t.status !== filter.status) return false;
+    if (filter.dateRange === 'today' && t.date !== todayStr) return false;
+    if (filter.dateRange === 'month' && (!t.date || !t.date.startsWith(currentMonthStr))) return false;
+    if (filter.dateRange === 'year' && (!t.date || !t.date.startsWith(currentYearStr))) return false;
 
     return true;
   });
@@ -579,10 +787,10 @@ function attachTripEvents() {
   });
 
   document.querySelectorAll('.btn-delete-trip').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const id = btn.getAttribute('data-id');
       if (confirm('Are you sure you want to delete this trip record?')) {
-        deleteTrip(id);
+        await deleteTrip(id);
         loadState();
         renderCurrentTab();
         showToast('Trip record deleted', 'success');
@@ -592,7 +800,443 @@ function attachTripEvents() {
 }
 
 /* ==========================================================================
-   3. CUSTOMERS VIEW
+   3. FLEET & VEHICLES VIEW
+   ========================================================================== */
+function renderVehiclesView() {
+  const totalVehicles = state.vehicles.length;
+  const ownedCount = state.vehicles.filter(v => (v.ownership || 'Owned').toLowerCase() === 'owned').length;
+  const attachedCount = state.vehicles.filter(v => (v.ownership || '').toLowerCase() === 'attached').length;
+
+  let expiringDocsCount = 0;
+  state.vehicles.forEach(v => {
+    const dates = [v.fitnessExpiry, v.insuranceExpiry, v.permitExpiry, v.pucExpiry];
+    dates.forEach(d => {
+      if (d) {
+        const info = checkDocumentExpiry(d);
+        if (info.status === 'expired' || info.status === 'expiring') expiringDocsCount++;
+      }
+    });
+  });
+
+  // Filter vehicles
+  const filtered = state.vehicles.filter(v => {
+    if (state.vehicleFilter.search) {
+      const q = state.vehicleFilter.search.toLowerCase();
+      const matchNum = (v.vehicleNumber || '').toLowerCase().includes(q);
+      const matchModel = (v.makeModel || '').toLowerCase().includes(q);
+      const matchDriver = (v.driverName || '').toLowerCase().includes(q);
+      if (!matchNum && !matchModel && !matchDriver) return false;
+    }
+    if (state.vehicleFilter.ownership !== 'all' && (v.ownership || 'Owned') !== state.vehicleFilter.ownership) {
+      return false;
+    }
+    return true;
+  });
+
+  const cards = filtered.map(v => {
+    const fit = checkDocumentExpiry(v.fitnessExpiry);
+    const ins = checkDocumentExpiry(v.insuranceExpiry);
+    const per = checkDocumentExpiry(v.permitExpiry);
+    const puc = checkDocumentExpiry(v.pucExpiry);
+
+    // Calculate vehicle trip performance
+    const vTrips = state.trips.filter(t => (t.vehicleNumber || '').toUpperCase().trim() === v.vehicleNumber.toUpperCase().trim());
+    let vRevenue = 0, vExpenses = 0;
+    vTrips.forEach(t => {
+      vRevenue += (Number(t.amount) || 0);
+      vExpenses += ((Number(t.fuelCost) || 0) + (Number(t.driverCost) || 0) + (Number(t.tollCost) || 0) + (Number(t.otherExpense) || 0));
+    });
+    const vProfit = vRevenue - vExpenses;
+
+    return `
+      <div class="vehicle-card">
+        <div class="vehicle-card-top">
+          <div>
+            <div class="vehicle-plate">${escapeHtml(v.vehicleNumber)}</div>
+            <div class="vehicle-model-text">${escapeHtml(v.makeModel || 'Commercial Truck')} • ${escapeHtml(v.vehicleType || 'Truck')}</div>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <span class="badge-status" style="background: var(--slate-100); color: var(--slate-700);">${escapeHtml(v.ownership || 'Owned')}</span>
+            <span class="badge-status badge-${(v.status || 'Active').toLowerCase()}">${escapeHtml(v.status || 'Active')}</span>
+          </div>
+        </div>
+
+        <div style="font-size: 0.82rem; color: var(--slate-600); display: flex; justify-content: space-between;">
+          <span>Capacity: <strong>${v.capacityTons || 16} Tons</strong></span>
+          <span>Driver: <strong>${escapeHtml(v.driverName || 'Not Assigned')}</strong></span>
+        </div>
+
+        <!-- Compliance Document Expiries -->
+        <div class="doc-compliance-grid">
+          <div class="doc-item">
+            <span class="doc-name">Fitness</span>
+            <span class="badge-status ${fit.badgeClass}" style="font-size: 0.72rem; padding: 2px 6px;">${fit.label}</span>
+          </div>
+          <div class="doc-item">
+            <span class="doc-name">Insurance</span>
+            <span class="badge-status ${ins.badgeClass}" style="font-size: 0.72rem; padding: 2px 6px;">${ins.label}</span>
+          </div>
+          <div class="doc-item">
+            <span class="doc-name">National Permit</span>
+            <span class="badge-status ${per.badgeClass}" style="font-size: 0.72rem; padding: 2px 6px;">${per.label}</span>
+          </div>
+          <div class="doc-item">
+            <span class="doc-name">PUC (Pollution)</span>
+            <span class="badge-status ${puc.badgeClass}" style="font-size: 0.72rem; padding: 2px 6px;">${puc.label}</span>
+          </div>
+        </div>
+
+        <!-- Financial Performance Row -->
+        <div class="vehicle-stats-row">
+          <div>Trips: <strong>${vTrips.length}</strong></div>
+          <div>Rev: <strong>${formatRupee(vRevenue)}</strong></div>
+          <div style="color: #047857;">Profit: <strong>${formatRupee(vProfit)}</strong></div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-top: auto;">
+          <button class="btn btn-secondary btn-sm btn-edit-vehicle" data-id="${v.id}" style="flex: 1;">Edit Truck & Docs</button>
+          <button class="btn btn-outline btn-sm btn-delete-vehicle" data-id="${v.id}" style="color: #dc2626;">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <!-- Top Fleet Counters -->
+    <div class="metrics-grid" style="margin-bottom: 24px;">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">Total Fleet</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16V6a1 1 0 00-1-1H4a1 1 0 00-1 1v10a1 1 0 001 1h1m8-1a1 1 0 01-1 1H9m4-1V8a1 1 0 011-1h2.586a1 1 0 01.707.293l3.414 3.414a1 1 0 01.293.707V16a1 1 0 01-1 1h-1m-6-1a1 1 0 001 1h1M5 17a2 2 0 104 0m-4 0a2 2 0 114 0m6 0a2 2 0 104 0m-4 0a2 2 0 114 0" /></svg>
+          </div>
+        </div>
+        <div class="metric-value">${totalVehicles}</div>
+        <div class="metric-sub">Commercial registered vehicles</div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">Owned vs Attached</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value" style="color: #047857;">${ownedCount} Owned</div>
+        <div class="metric-sub">${attachedCount} Market / Attached trucks</div>
+      </div>
+
+      <div class="metric-card card-orange">
+        <div class="metric-header">
+          <span class="metric-title">Expiring Documents</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value text-pending">${expiringDocsCount}</div>
+        <div class="metric-sub">Fitness, Insurance, Permit or PUC &lt; 30d</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar-card">
+      <div class="search-box">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        <input type="text" id="veh-search-input" placeholder="Search by vehicle registration plate, model, driver..." value="${escapeHtml(state.vehicleFilter.search)}" />
+      </div>
+
+      <div class="filter-group">
+        <select id="veh-ownership-filter" class="filter-select">
+          <option value="all" ${state.vehicleFilter.ownership === 'all' ? 'selected' : ''}>All Ownership</option>
+          <option value="Owned" ${state.vehicleFilter.ownership === 'Owned' ? 'selected' : ''}>Owned</option>
+          <option value="Attached" ${state.vehicleFilter.ownership === 'Attached' ? 'selected' : ''}>Attached</option>
+        </select>
+
+        <button id="btn-export-vehicles-csv" class="btn btn-secondary btn-sm">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+          Export CSV
+        </button>
+
+        <button id="btn-add-vehicle-modal" class="btn btn-primary">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+          Add New Vehicle
+        </button>
+      </div>
+    </div>
+
+    <!-- Vehicles Cards Grid -->
+    <div class="vehicles-grid">
+      ${cards || '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--slate-500);">No vehicles matching the criteria. Click "+ Add New Vehicle" to register your fleet.</div>'}
+    </div>
+  `;
+}
+
+function attachVehicleEvents() {
+  const addVehBtn = document.getElementById('btn-add-vehicle-modal');
+  if (addVehBtn) addVehBtn.addEventListener('click', () => openVehicleModal());
+
+  const searchInput = document.getElementById('veh-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      state.vehicleFilter.search = e.target.value;
+      renderCurrentTab();
+    });
+  }
+
+  const ownerSelect = document.getElementById('veh-ownership-filter');
+  if (ownerSelect) {
+    ownerSelect.addEventListener('change', (e) => {
+      state.vehicleFilter.ownership = e.target.value;
+      renderCurrentTab();
+    });
+  }
+
+  const exportBtn = document.getElementById('btn-export-vehicles-csv');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      exportVehiclesToCSV(state.vehicles);
+      showToast('Vehicles exported to CSV successfully', 'success');
+    });
+  }
+
+  document.querySelectorAll('.btn-edit-vehicle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      openVehicleModal(id);
+    });
+  });
+
+  document.querySelectorAll('.btn-delete-vehicle').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-id');
+      if (confirm('Are you sure you want to remove this vehicle from your fleet?')) {
+        await deleteVehicle(id);
+        loadState();
+        renderCurrentTab();
+        showToast('Vehicle deleted successfully', 'success');
+      }
+    });
+  });
+}
+
+/* ==========================================================================
+   4. DRIVERS & STAFF KHARACHA LEDGER VIEW
+   ========================================================================== */
+function renderDriversView() {
+  const totalDrivers = state.drivers.length;
+  const onTripCount = state.drivers.filter(d => (d.status || '').toLowerCase() === 'on trip').length;
+  const availableCount = state.drivers.filter(d => (d.status || '').toLowerCase() === 'available').length;
+  
+  let totalAdvancePending = 0;
+  state.drivers.forEach(d => {
+    totalAdvancePending += (Number(d.advanceBalance) || 0);
+  });
+
+  const filtered = state.drivers.filter(d => {
+    if (state.driverFilter.search) {
+      const q = state.driverFilter.search.toLowerCase();
+      const matchName = (d.name || '').toLowerCase().includes(q);
+      const matchPhone = (d.phone || '').toLowerCase().includes(q);
+      const matchLic = (d.licenseNumber || '').toLowerCase().includes(q);
+      const matchTruck = (d.assignedVehicle || '').toLowerCase().includes(q);
+      if (!matchName && !matchPhone && !matchLic && !matchTruck) return false;
+    }
+    if (state.driverFilter.status !== 'all' && (d.status || 'Available') !== state.driverFilter.status) {
+      return false;
+    }
+    return true;
+  });
+
+  const cards = filtered.map(d => {
+    const adv = Number(d.advanceBalance) || 0;
+    const initials = (d.name || 'D').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+
+    let cleanPhone = (d.phone || '').replace(/[^0-9]/g, '');
+    if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+    const waDriverUrl = cleanPhone ? `https://api.whatsapp.com/send?phone=${cleanPhone}` : null;
+
+    return `
+      <div class="driver-card">
+        <div class="driver-header">
+          <div class="driver-avatar">${initials}</div>
+          <div class="driver-info">
+            <h4>${escapeHtml(d.name)}</h4>
+            <p>${escapeHtml(d.phone || 'No phone')} • Lic: ${escapeHtml(d.licenseNumber || 'N/A')}</p>
+          </div>
+          <span class="badge-status badge-${(d.status || 'available').toLowerCase().replace(' ', '')}" style="margin-left: auto;">
+            ${escapeHtml(d.status || 'Available')}
+          </span>
+        </div>
+
+        <div style="font-size: 0.85rem; color: var(--slate-600); display: flex; justify-content: space-between; background: var(--slate-50); padding: 8px 12px; border-radius: var(--radius-sm);">
+          <span>Assigned Truck: <strong>${escapeHtml(d.assignedVehicle || 'None')}</strong></span>
+          <span>Salary: <strong>${formatRupee(d.monthlySalary || 0)}/mo</strong></span>
+        </div>
+
+        <!-- Advance Kharacha Chip -->
+        <div class="advance-balance-chip">
+          <div>
+            <div style="font-size: 0.72rem; color: var(--accent-orange); text-transform: uppercase; font-weight: 700;">Trip Advance / Kharacha Due</div>
+            <div style="font-size: 1.15rem; font-weight: 800; color: #9a3412;">${formatRupee(adv)}</div>
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn btn-orange btn-sm btn-driver-advance" data-id="${d.id}" data-type="advance" style="padding: 4px 10px; font-size: 0.78rem;">
+              + Advance
+            </button>
+            ${adv > 0 ? `
+              <button class="btn btn-secondary btn-sm btn-driver-settle" data-id="${d.id}" data-type="settle" style="padding: 4px 10px; font-size: 0.78rem;">
+                Settle
+              </button>
+            ` : ''}
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-top: auto;">
+          ${waDriverUrl ? `
+            <a href="${waDriverUrl}" target="_blank" class="btn btn-whatsapp btn-sm" style="flex: 1; text-align: center;">WhatsApp</a>
+          ` : ''}
+          <button class="btn btn-secondary btn-sm btn-edit-driver" data-id="${d.id}" style="flex: 1;">Edit Driver</button>
+          <button class="btn btn-outline btn-sm btn-delete-driver" data-id="${d.id}" style="color: #dc2626;">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <!-- Top Driver Counters -->
+    <div class="metrics-grid" style="margin-bottom: 24px;">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">Total Staff</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value">${totalDrivers}</div>
+        <div class="metric-sub">Registered drivers & staff</div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">Driver Status</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value" style="color: #047857;">${onTripCount} On Trip</div>
+        <div class="metric-sub">${availableCount} Available for dispatch</div>
+      </div>
+
+      <div class="metric-card card-orange">
+        <div class="metric-header">
+          <span class="metric-title">Trip Advances Due</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value text-pending">${formatRupee(totalAdvancePending)}</div>
+        <div class="metric-sub">Pending driver Kharacha balance</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar-card">
+      <div class="search-box">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+        <input type="text" id="driv-search-input" placeholder="Search driver by name, phone, license, assigned truck..." value="${escapeHtml(state.driverFilter.search)}" />
+      </div>
+
+      <div class="filter-group">
+        <select id="driv-status-filter" class="filter-select">
+          <option value="all" ${state.driverFilter.status === 'all' ? 'selected' : ''}>All Statuses</option>
+          <option value="Available" ${state.driverFilter.status === 'Available' ? 'selected' : ''}>Available</option>
+          <option value="On Trip" ${state.driverFilter.status === 'On Trip' ? 'selected' : ''}>On Trip</option>
+          <option value="On Leave" ${state.driverFilter.status === 'On Leave' ? 'selected' : ''}>On Leave</option>
+        </select>
+
+        <button id="btn-export-drivers-csv" class="btn btn-secondary btn-sm">
+          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+          Export CSV
+        </button>
+
+        <button id="btn-add-driver-modal" class="btn btn-primary">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+          Add New Driver
+        </button>
+      </div>
+    </div>
+
+    <!-- Drivers Cards Grid -->
+    <div class="drivers-grid">
+      ${cards || '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--slate-500);">No drivers found matching criteria. Click "+ Add New Driver" to add drivers.</div>'}
+    </div>
+  `;
+}
+
+function attachDriverEvents() {
+  const addDrivBtn = document.getElementById('btn-add-driver-modal');
+  if (addDrivBtn) addDrivBtn.addEventListener('click', () => openDriverModal());
+
+  const searchInput = document.getElementById('driv-search-input');
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      state.driverFilter.search = e.target.value;
+      renderCurrentTab();
+    });
+  }
+
+  const statusSelect = document.getElementById('driv-status-filter');
+  if (statusSelect) {
+    statusSelect.addEventListener('change', (e) => {
+      state.driverFilter.status = e.target.value;
+      renderCurrentTab();
+    });
+  }
+
+  const exportBtn = document.getElementById('btn-export-drivers-csv');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      exportDriversToCSV(state.drivers);
+      showToast('Drivers exported to CSV successfully', 'success');
+    });
+  }
+
+  document.querySelectorAll('.btn-driver-advance').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      openDriverAdvanceModal(id, 'advance');
+    });
+  });
+
+  document.querySelectorAll('.btn-driver-settle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      openDriverAdvanceModal(id, 'settle');
+    });
+  });
+
+  document.querySelectorAll('.btn-edit-driver').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-id');
+      openDriverModal(id);
+    });
+  });
+
+  document.querySelectorAll('.btn-delete-driver').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-id');
+      if (confirm('Are you sure you want to delete this driver profile?')) {
+        await deleteDriver(id);
+        loadState();
+        renderCurrentTab();
+        showToast('Driver deleted', 'success');
+      }
+    });
+  });
+}
+
+/* ==========================================================================
+   5. CUSTOMERS VIEW
    ========================================================================== */
 function renderCustomersView() {
   const customerStats = state.customers.map(c => {
@@ -607,7 +1251,7 @@ function renderCustomersView() {
     });
 
     const pendingAmt = totalBusiness - paidAmt;
-    const waUrl = pendingAmt > 0 ? generateWhatsAppReminderLink(c.phone, c.name, pendingAmt, null, state.settings.businessName) : null;
+    const waUrl = pendingAmt > 0 ? generateWhatsAppReminderLink(c.phone, c.name, pendingAmt, null, state.settings) : null;
 
     return {
       ...c,
@@ -619,38 +1263,38 @@ function renderCustomersView() {
     };
   });
 
-  // Sort customers by total business volume descending
   customerStats.sort((a, b) => b.totalBusiness - a.totalBusiness);
 
   const cards = customerStats.map(c => `
-    <div class="section-card" style="display: flex; flex-direction: column; justify-content: space-between;">
-      <div>
-        <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
+    <div class="customer-card">
+      <div style="display: flex; align-items: flex-start; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="customer-avatar">${escapeHtml(c.name.substring(0, 2).toUpperCase())}</div>
           <div>
-            <h3 style="font-size: 1.1rem; font-weight: 700; color: var(--slate-900);">${escapeHtml(c.name)}</h3>
+            <h3 style="font-size: 1.05rem; font-weight: 700; color: var(--slate-900);">${escapeHtml(c.name)}</h3>
             <p style="font-size: 0.8rem; color: var(--slate-500);">${escapeHtml(c.city || 'City not set')} • ${escapeHtml(c.phone || 'No phone')}</p>
           </div>
-          <span class="badge-status" style="background: var(--slate-100); color: var(--slate-700);">${c.tripCount} trip${c.tripCount !== 1 ? 's' : ''}</span>
         </div>
+        <span class="badge-status" style="background: var(--slate-100); color: var(--slate-700);">${c.tripCount} trip${c.tripCount !== 1 ? 's' : ''}</span>
+      </div>
 
-        ${c.gstin ? `<div style="font-size: 0.76rem; font-family: monospace; color: var(--slate-500); margin-bottom: 16px;">GSTIN: ${escapeHtml(c.gstin)}</div>` : ''}
+      ${c.gstin ? `<div style="font-size: 0.76rem; font-family: monospace; color: var(--slate-500);">GSTIN: ${escapeHtml(c.gstin)}</div>` : ''}
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: var(--primary-50); padding: 14px; border-radius: var(--radius-md); margin-bottom: 20px;">
-          <div>
-            <span style="font-size: 0.72rem; color: var(--slate-500); text-transform: uppercase; font-weight: 600;">Total Business</span>
-            <div style="font-weight: 800; font-size: 1.1rem; color: var(--slate-900);">${formatRupee(c.totalBusiness)}</div>
-          </div>
-          <div>
-            <span style="font-size: 0.72rem; color: var(--slate-500); text-transform: uppercase; font-weight: 600;">Pending Balance</span>
-            <div style="font-weight: 800; font-size: 1.1rem; color: ${c.pendingAmt > 0 ? 'var(--accent-orange)' : '#047857'};">
-              ${formatRupee(c.pendingAmt)}
-            </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; background: var(--primary-50); padding: 14px; border-radius: var(--radius-md);">
+        <div>
+          <span style="font-size: 0.72rem; color: var(--slate-500); text-transform: uppercase; font-weight: 600;">Total Business</span>
+          <div style="font-weight: 800; font-size: 1.1rem; color: var(--slate-900);">${formatRupee(c.totalBusiness)}</div>
+        </div>
+        <div>
+          <span style="font-size: 0.72rem; color: var(--slate-500); text-transform: uppercase; font-weight: 600;">Pending Balance</span>
+          <div style="font-weight: 800; font-size: 1.1rem; color: ${c.pendingAmt > 0 ? 'var(--accent-orange)' : '#047857'};">
+            ${formatRupee(c.pendingAmt)}
           </div>
         </div>
       </div>
 
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        ${c.waUrl ? `<a href="${c.waUrl}" target="_blank" class="btn btn-whatsapp btn-sm" style="flex: 1; text-align:center;">WhatsApp Reminder</a>` : ''}
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto;">
+        ${c.waUrl ? `<a href="${c.waUrl}" target="_blank" class="btn btn-whatsapp btn-sm" style="flex: 1; text-align:center;">WhatsApp</a>` : ''}
         <button class="btn btn-secondary btn-sm btn-view-statement" data-name="${escapeHtml(c.name)}" style="flex: 1;">Statement</button>
         <button class="btn btn-outline btn-sm btn-edit-customer" data-id="${c.id}">Edit</button>
       </div>
@@ -660,7 +1304,7 @@ function renderCustomersView() {
   return `
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px;">
       <div>
-        <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--slate-900);">Customer Accounts (${state.customers.length})</h3>
+        <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--slate-900);">Customer Directory (${state.customers.length})</h3>
         <p style="font-size: 0.82rem; color: var(--slate-500);">Individual customer ledgers & pending dues</p>
       </div>
       <button id="btn-add-customer-modal" class="btn btn-primary">
@@ -669,7 +1313,7 @@ function renderCustomersView() {
       </button>
     </div>
 
-    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px;">
+    <div class="customers-grid">
       ${cards}
     </div>
   `;
@@ -697,37 +1341,80 @@ function attachCustomerEvents() {
 }
 
 /* ==========================================================================
-   4. REPORTS VIEW
+   6. REPORTS VIEW
    ========================================================================== */
 function renderReportsView() {
   const todayStr = getTodayString();
   const currentMonthStr = todayStr.substring(0, 7);
 
+  // Compute Grand Totals
+  let totalRevenue = 0, totalFuel = 0, totalDriver = 0, totalToll = 0, totalOther = 0;
+  let totalPaid = 0;
+
+  state.trips.forEach(t => {
+    const amt = Number(t.amount) || 0;
+    const paid = Number(t.paidAmount) || (t.status === 'Paid' ? amt : 0);
+    totalRevenue += amt;
+    totalPaid += paid;
+    totalFuel += (Number(t.fuelCost) || 0);
+    totalDriver += (Number(t.driverCost) || 0);
+    totalToll += (Number(t.tollCost) || 0);
+    totalOther += (Number(t.otherExpense) || 0);
+  });
+
+  const totalExpenses = totalFuel + totalDriver + totalToll + totalOther;
+  const netProfit = totalRevenue - totalExpenses;
+  const marginPct = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0;
+
+  // GTA RCM calculation (5% GST under Reverse Charge Mechanism)
+  const rcmTaxableValue = totalRevenue;
+  const rcmEstimatedGst = Math.round(rcmTaxableValue * 0.05);
+
   return `
-    <!-- Reports Navigation Banner -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 28px;">
-      <div class="section-card">
-        <div style="font-size: 0.8rem; font-weight: 700; color: var(--primary-700); text-transform: uppercase;">Daily Report</div>
-        <div style="font-size: 1.4rem; font-weight: 800; margin: 6px 0;">Today's Income</div>
-        <div style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 14px;">Selected date analytics & trip logs</div>
-        <input type="date" id="report-daily-date" class="form-input" value="${todayStr}" />
+    <!-- High-level Financial Summary -->
+    <div class="metrics-grid" style="margin-bottom: 24px;">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">Total Freight Turnover</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value">${formatRupee(totalRevenue)}</div>
+        <div class="metric-sub">Paid: ${formatRupee(totalPaid)} • Due: ${formatRupee(totalRevenue - totalPaid)}</div>
       </div>
 
-      <div class="section-card">
-        <div style="font-size: 0.8rem; font-weight: 700; color: var(--primary-700); text-transform: uppercase;">Monthly Report</div>
-        <div style="font-size: 1.4rem; font-weight: 800; margin: 6px 0;">Monthly Collection</div>
-        <div style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 14px;">Full monthly breakdown & charts</div>
-        <input type="month" id="report-monthly-date" class="form-input" value="${currentMonthStr}" />
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">Total Operating Costs</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value" style="color: #c2410c;">${formatRupee(totalExpenses)}</div>
+        <div class="metric-sub">Diesel: ${formatRupee(totalFuel)} • Driver/Toll: ${formatRupee(totalDriver + totalToll)}</div>
       </div>
 
-      <div class="section-card">
-        <div style="font-size: 0.8rem; font-weight: 700; color: var(--primary-700); text-transform: uppercase;">Yearly Report</div>
-        <div style="font-size: 1.4rem; font-weight: 800; margin: 6px 0;">Annual Freight Business</div>
-        <div style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 14px;">Yearly growth & collection trends</div>
-        <select id="report-yearly-date" class="form-select">
-          <option value="2026" selected>2026</option>
-          <option value="2025">2025</option>
-        </select>
+      <div class="metric-card card-blue">
+        <div class="metric-header">
+          <span class="metric-title">Net Operating Profit</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+          </div>
+        </div>
+        <div class="metric-value" style="color: #047857;">${formatRupee(netProfit)}</div>
+        <div class="metric-sub">Profit Margin: <strong>${marginPct}%</strong></div>
+      </div>
+
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-title">GST GTA (5% RCM)</span>
+          <div class="metric-icon-box">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+          </div>
+        </div>
+        <div class="metric-value">${formatRupee(rcmEstimatedGst)}</div>
+        <div class="metric-sub">RCM payable by consignor/consignee</div>
       </div>
     </div>
 
@@ -753,6 +1440,28 @@ function renderReportsView() {
         <div id="report-payment-chart"></div>
       </div>
     </div>
+
+    <!-- Export Dataset Actions -->
+    <div class="section-card" style="margin-top: 24px;">
+      <div class="section-card-header">
+        <div class="section-title-group">
+          <h3>One-Click Data Exports (CSV & Excel)</h3>
+          <p>Download complete operational registers for your Chartered Accountant (CA) or business ledger</p>
+        </div>
+      </div>
+      <div style="display: flex; gap: 14px; flex-wrap: wrap;">
+        <button id="btn-rep-export-trips" class="btn btn-primary">
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+          Export All Trips (CSV)
+        </button>
+        <button id="btn-rep-export-vehicles" class="btn btn-secondary">
+          Export Fleet Register (CSV)
+        </button>
+        <button id="btn-rep-export-drivers" class="btn btn-secondary">
+          Export Driver Ledger (CSV)
+        </button>
+      </div>
+    </div>
   `;
 }
 
@@ -763,84 +1472,192 @@ function initReportCharts() {
   }, 50);
 }
 
+function attachReportsEvents() {
+  const expTrips = document.getElementById('btn-rep-export-trips');
+  if (expTrips) expTrips.addEventListener('click', () => {
+    exportTripsToCSV(state.trips);
+    showToast('Trips CSV exported successfully', 'success');
+  });
+
+  const expVeh = document.getElementById('btn-rep-export-vehicles');
+  if (expVeh) expVeh.addEventListener('click', () => {
+    exportVehiclesToCSV(state.vehicles);
+    showToast('Fleet CSV exported successfully', 'success');
+  });
+
+  const expDriv = document.getElementById('btn-rep-export-drivers');
+  if (expDriv) expDriv.addEventListener('click', () => {
+    exportDriversToCSV(state.drivers);
+    showToast('Driver Ledger CSV exported successfully', 'success');
+  });
+}
+
 /* ==========================================================================
-   5. SETTINGS VIEW
+   7. SETTINGS VIEW
    ========================================================================== */
 function renderSettingsView() {
   const s = state.settings;
+  const sync = getSyncStatus();
+  const dbInfo = sync.serverInfo.database || {};
+
   return `
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
-      <!-- Business Details Form -->
+    <div style="display: grid; grid-template-columns: 1fr; gap: 24px; max-width: 900px;">
+      
+      <!-- Database & Cloud Connection Card -->
       <div class="section-card">
         <div class="section-card-header">
           <div class="section-title-group">
-            <h3>Business Details</h3>
-            <p>Update company name, phone, and GSTIN</p>
+            <h3>Cloud Database & Server Sync</h3>
+            <p>MongoDB Atlas clustering & live multi-device synchronization</p>
+          </div>
+          <button id="btn-test-db-sync" class="btn btn-secondary btn-sm">
+            Ping Database
+          </button>
+        </div>
+
+        <div style="background: var(--slate-50); border: 1px solid var(--slate-200); padding: 18px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;">
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <div style="width: 14px; height: 14px; border-radius: 50%; background: ${sync.isServerOnline ? '#10b981' : '#dc2626'}; box-shadow: 0 0 8px ${sync.isServerOnline ? '#10b981' : '#dc2626'};"></div>
+            <div>
+              <div style="font-weight: 700; color: var(--slate-900);">
+                Engine: ${dbInfo.engine || (sync.isServerOnline ? 'Connected' : 'Offline Browser Cache')}
+              </div>
+              <div style="font-size: 0.82rem; color: var(--slate-500); margin-top: 2px;">
+                Storage: ${dbInfo.storageLocation || 'Local storage memory'}
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-outline btn-sm" onclick="window.openDiagnosticsModal()">
+            View Network IPs & LAN QR
+          </button>
+        </div>
+
+        <div style="margin-top: 16px; font-size: 0.85rem; color: var(--slate-600); line-height: 1.5;">
+          💡 <strong>MongoDB Atlas Setup:</strong> To connect your live cloud database permanently, add your connection string to <code>.env</code> locally (<code>MONGODB_URI=mongodb+srv://...</code>) or under <strong>Vercel Project Settings &gt; Environment Variables</strong>. The app automatically detects MongoDB and handles migrations and seeding!
+        </div>
+      </div>
+
+      <!-- Business Profile Form -->
+      <div class="section-card">
+        <div class="section-card-header">
+          <div class="section-title-group">
+            <h3>Business Profile & Billing Details</h3>
+            <p>Used on printable Lorry Receipts (LR), Bilty invoices and WhatsApp payment reminders</p>
           </div>
         </div>
 
-        <form id="settings-form" class="form-grid">
-          <div class="form-group form-group-full">
-            <label class="form-label">Business Name</label>
-            <input type="text" id="set-biz-name" class="form-input" value="${escapeHtml(s.businessName || '')}" required />
+        <form id="settings-form">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Transport Agency Name</label>
+              <input type="text" id="set-biz-name" class="form-input" value="${escapeHtml(s.businessName || '')}" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Owner / Proprietor Name</label>
+              <input type="text" id="set-owner-name" class="form-input" value="${escapeHtml(s.ownerName || '')}" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Primary Mobile Phone</label>
+              <input type="text" id="set-phone" class="form-input" value="${escapeHtml(s.phone || '')}" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Alternate Phone / Landline</label>
+              <input type="text" id="set-alt-phone" class="form-input" value="${escapeHtml(s.altPhone || '')}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">GSTIN (15 Digits)</label>
+              <input type="text" id="set-gstin" class="form-input" value="${escapeHtml(s.gstin || '')}" placeholder="27AABCS123411Z5" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">PAN Number</label>
+              <input type="text" id="set-pan" class="form-input" value="${escapeHtml(s.pan || '')}" placeholder="AABCS1234F" />
+            </div>
+
+            <div class="form-group form-group-full">
+              <label class="form-label">Transport Yard / Office Address</label>
+              <input type="text" id="set-address" class="form-input" value="${escapeHtml(s.address || '')}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">City, State</label>
+              <input type="text" id="set-city" class="form-input" value="${escapeHtml(s.city || '')}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">LR Number Prefix</label>
+              <input type="text" id="set-lr-prefix" class="form-input" value="${escapeHtml(s.lrPrefix || 'LR-2026-')}" />
+            </div>
+
+            <!-- Banking & UPI Details for Instant QR Payments -->
+            <div class="form-group form-group-full" style="margin-top: 10px;">
+              <h4 style="font-size: 1rem; font-weight: 700; color: var(--slate-900);">Bank &amp; Dynamic UPI QR Settlement</h4>
+              <p style="font-size: 0.8rem; color: var(--slate-500);">Dynamic UPI QR codes are generated automatically on Lorry Receipts for customers to pay via PhonePe / GPay</p>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">UPI ID (VPA) for Direct QR Scan</label>
+              <input type="text" id="set-upi" class="form-input" value="${escapeHtml(s.upiId || '')}" placeholder="e.g. 9820012345@upi" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Bank Name</label>
+              <input type="text" id="set-bank" class="form-input" value="${escapeHtml(s.bankName || '')}" placeholder="e.g. State Bank of India" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Bank Account Number</label>
+              <input type="text" id="set-account" class="form-input" value="${escapeHtml(s.accountNumber || '')}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">IFSC Code</label>
+              <input type="text" id="set-ifsc" class="form-input" value="${escapeHtml(s.ifscCode || '')}" placeholder="e.g. SBIN0001234" />
+            </div>
+
+            <div class="form-group form-group-full">
+              <label class="form-label">LR Terms &amp; Conditions (Printed on receipts)</label>
+              <textarea id="set-terms" class="form-textarea" rows="3">${escapeHtml(s.terms || '')}</textarea>
+            </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Owner Name</label>
-            <input type="text" id="set-owner-name" class="form-input" value="${escapeHtml(s.ownerName || '')}" required />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Mobile Number</label>
-            <input type="text" id="set-phone" class="form-input" value="${escapeHtml(s.phone || '')}" />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">City / Location</label>
-            <input type="text" id="set-city" class="form-input" value="${escapeHtml(s.city || '')}" />
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">GSTIN Number (Optional)</label>
-            <input type="text" id="set-gstin" class="form-input" value="${escapeHtml(s.gstin || '')}" />
-          </div>
-
-          <div class="form-group-full" style="margin-top: 10px;">
-            <button type="submit" class="btn btn-primary">Save Business Details</button>
+          <div style="margin-top: 24px; display: flex; justify-content: flex-end;">
+            <button type="submit" class="btn btn-primary">Save Business Settings</button>
           </div>
         </form>
       </div>
 
-      <!-- Backup & Restore -->
+      <!-- Backup & Factory Reset Card -->
       <div class="section-card">
         <div class="section-card-header">
           <div class="section-title-group">
-            <h3>Data Management</h3>
-            <p>Backup, restore, or reset sample data</p>
+            <h3>Backup, Restore & Reset</h3>
+            <p>Export your full ledger database or restore from a previous backup file</p>
           </div>
         </div>
 
-        <div style="display: flex; flex-direction: column; gap: 16px;">
-          <div style="background: var(--slate-50); padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--slate-200);">
-            <h4 style="font-weight: 700; font-size: 0.95rem; margin-bottom: 4px;">Download Data Backup (JSON)</h4>
-            <p style="font-size: 0.8rem; color: var(--slate-500); margin-bottom: 12px;">Save a copy of all trips, customers, and settings to your computer.</p>
-            <button id="btn-export-json" class="btn btn-secondary btn-sm">Download Backup</button>
-          </div>
+        <div style="display: flex; gap: 14px; flex-wrap: wrap;">
+          <button id="btn-export-backup" class="btn btn-secondary">
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Download Backup (JSON)
+          </button>
 
-          <div style="background: var(--slate-50); padding: 16px; border-radius: var(--radius-md); border: 1px solid var(--slate-200);">
-            <h4 style="font-weight: 700; font-size: 0.95rem; margin-bottom: 4px;">Restore Data Backup</h4>
-            <p style="font-size: 0.8rem; color: var(--slate-500); margin-bottom: 12px;">Upload a previously saved JSON backup file.</p>
-            <input type="file" id="input-import-json" accept=".json" style="display: none;" />
-            <button id="btn-import-json" class="btn btn-secondary btn-sm">Choose Backup File</button>
-          </div>
+          <label class="btn btn-secondary" style="cursor: pointer; margin: 0;">
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            Restore from Backup
+            <input type="file" id="input-import-backup" accept=".json" style="display: none;" />
+          </label>
 
-          <div style="background: #fff1f2; padding: 16px; border-radius: var(--radius-md); border: 1px solid #fecdd3; margin-top: 10px;">
-            <h4 style="font-weight: 700; font-size: 0.95rem; color: #991b1b; margin-bottom: 4px;">Reset Sample Data</h4>
-            <p style="font-size: 0.8rem; color: #9f1239; margin-bottom: 12px;">Restore default 5 customers and 12 sample trips.</p>
-            <button id="btn-reset-data" class="btn btn-secondary btn-sm" style="color: #991b1b; border-color: #fca5a5;">Reset to Sample Data</button>
-          </div>
+          <button id="btn-reset-sample" class="btn btn-outline" style="color: #dc2626; border-color: #fca5a5; margin-left: auto;">
+            Reset to Sample Data
+          </button>
         </div>
       </div>
+
     </div>
   `;
 }
@@ -848,110 +1665,145 @@ function renderSettingsView() {
 function attachSettingsEvents() {
   const form = document.getElementById('settings-form');
   if (form) {
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      saveSettings({
+      const updated = {
         businessName: document.getElementById('set-biz-name').value,
         ownerName: document.getElementById('set-owner-name').value,
         phone: document.getElementById('set-phone').value,
+        altPhone: document.getElementById('set-alt-phone').value,
+        gstin: document.getElementById('set-gstin').value,
+        pan: document.getElementById('set-pan').value,
+        address: document.getElementById('set-address').value,
         city: document.getElementById('set-city').value,
-        gstin: document.getElementById('set-gstin').value
-      });
+        lrPrefix: document.getElementById('set-lr-prefix').value,
+        upiId: document.getElementById('set-upi').value,
+        bankName: document.getElementById('set-bank').value,
+        accountNumber: document.getElementById('set-account').value,
+        ifscCode: document.getElementById('set-ifsc').value,
+        terms: document.getElementById('set-terms').value
+      };
+
+      await saveSettings(updated);
       loadState();
-      showToast('Business details updated successfully!', 'success');
+      showToast('Business settings saved successfully!', 'success');
     });
   }
 
-  const exportBtn = document.getElementById('btn-export-json');
-  if (exportBtn) {
-    exportBtn.addEventListener('click', () => {
-      const json = exportBackupJSON();
-      const blob = new Blob([json], { type: 'application/json' });
+  const pingBtn = document.getElementById('btn-test-db-sync');
+  if (pingBtn) {
+    pingBtn.addEventListener('click', async () => {
+      pingBtn.disabled = true;
+      pingBtn.textContent = 'Pinging...';
+      const online = await triggerSync();
+      pingBtn.disabled = false;
+      pingBtn.textContent = 'Ping Database';
+      if (online) {
+        showToast('Database connection is healthy & synced!', 'success');
+      } else {
+        showToast('Running in local offline cache mode', 'info');
+      }
+      renderCurrentTab();
+    });
+  }
+
+  const exportBackupBtn = document.getElementById('btn-export-backup');
+  if (exportBackupBtn) {
+    exportBackupBtn.addEventListener('click', () => {
+      const jsonStr = exportBackupJSON();
+      const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Transport_Ledger_Backup_${getTodayString()}.json`;
+      a.download = `Transport_Ledger_Backup_${formatDateInput()}.json`;
       a.click();
-      showToast('Backup downloaded!', 'success');
+      URL.revokeObjectURL(url);
+      showToast('Backup downloaded successfully', 'success');
     });
   }
 
-  const importBtn = document.getElementById('btn-import-json');
-  const importInput = document.getElementById('input-import-json');
-  if (importBtn && importInput) {
-    importBtn.addEventListener('click', () => importInput.click());
+  const importInput = document.getElementById('input-import-backup');
+  if (importInput) {
     importInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = (evt) => {
-        const success = importBackupJSON(evt.target.result);
+      reader.onload = async (event) => {
+        const success = await importBackupJSON(event.target.result);
         if (success) {
           loadState();
           renderCurrentTab();
-          showToast('Data restored successfully!', 'success');
+          showToast('Database restored successfully from backup!', 'success');
         } else {
-          alert('Invalid backup JSON file.');
+          showToast('Failed to restore backup: Invalid file format', 'error');
         }
       };
       reader.readAsText(file);
     });
   }
 
-  const resetBtn = document.getElementById('btn-reset-data');
+  const resetBtn = document.getElementById('btn-reset-sample');
   if (resetBtn) {
-    resetBtn.addEventListener('click', () => {
-      if (confirm('Are you sure you want to reset data back to default sample data?')) {
-        resetToSampleData();
+    resetBtn.addEventListener('click', async () => {
+      if (confirm('Are you sure you want to reset all data to the factory sample dataset? Current changes will be overwritten.')) {
+        await resetToSampleData();
         loadState();
         renderCurrentTab();
-        showToast('Reset to sample data completed', 'success');
+        showToast('Reset to default sample data complete', 'success');
       }
     });
   }
 }
 
 /* ==========================================================================
-   MODAL CONTROLLERS & EVENT HANDLERS
+   8. MODALS & POPUPS
    ========================================================================== */
-function setupGlobalEvents() {
-  window.switchTab = switchTab;
-
-  // Backdrop overlay click to close
-  const modalBackdrop = document.getElementById('modal-backdrop');
-  if (modalBackdrop) {
-    modalBackdrop.addEventListener('click', (e) => {
-      if (e.target === modalBackdrop) closeModal();
-    });
-  }
-}
 
 function closeModal() {
   const modalBackdrop = document.getElementById('modal-backdrop');
   if (modalBackdrop) {
     modalBackdrop.classList.remove('open');
+    modalBackdrop.innerHTML = '';
   }
+  state.editingTripId = null;
+  state.editingCustomerId = null;
+  state.editingVehicleId = null;
+  state.editingDriverId = null;
 }
 
-// OPEN ADD/EDIT TRIP MODAL WITH EXPENSE TRACKER
+window.closeModal = closeModal;
+
+// 1. ADD / EDIT TRIP MODAL
 function openTripModal(tripId = null) {
   state.editingTripId = tripId;
   const existing = tripId ? state.trips.find(t => t.id === tripId) : null;
+  const lrNo = existing ? existing.lrNumber : generateLRNumber(state.trips, state.settings.lrPrefix || 'LR-2026-');
 
-  const customerOptions = state.customers.map(c => 
+  // Customer options
+  const custOptions = state.customers.map(c => 
     `<option value="${escapeHtml(c.name)}" ${existing && existing.customerName === c.name ? 'selected' : ''}>${escapeHtml(c.name)}</option>`
   ).join('');
 
+  // Vehicle options
+  const vehOptions = state.vehicles.map(v => 
+    `<option value="${escapeHtml(v.vehicleNumber)}" ${existing && existing.vehicleNumber === v.vehicleNumber ? 'selected' : ''}>${escapeHtml(v.vehicleNumber)} (${escapeHtml(v.makeModel)})</option>`
+  ).join('');
+
+  // Driver options
+  const drivOptions = state.drivers.map(d => 
+    `<option value="${escapeHtml(d.name)}" ${existing && existing.driverName === d.name ? 'selected' : ''}>${escapeHtml(d.name)}</option>`
+  ).join('');
+
   const modalHtml = `
-    <div class="modal-card">
+    <div class="modal-card" style="max-width: 700px;">
       <div class="modal-header">
-        <h3>${existing ? 'Edit Trip & Expense Record' : 'Add New Transport Trip'}</h3>
+        <h3>${existing ? 'Edit Trip Record' : 'Record New Transport Trip'}</h3>
         <button class="btn-close-modal" onclick="window.closeModal()">
           <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
 
-      <form id="trip-form">
+      <form id="trip-modal-form">
         <div class="modal-body">
           <div class="form-grid">
             <div class="form-group">
@@ -960,83 +1812,119 @@ function openTripModal(tripId = null) {
             </div>
 
             <div class="form-group">
-              <label class="form-label">Customer Name</label>
-              <select id="trip-customer" class="form-select" required>
-                <option value="">-- Select Customer --</option>
-                ${customerOptions}
-              </select>
+              <label class="form-label">LR (Bilty) Number</label>
+              <input type="text" id="trip-lr" class="form-input" value="${escapeHtml(lrNo)}" />
+            </div>
+
+            <div class="form-group form-group-full">
+              <label class="form-label">Customer / Party Name</label>
+              <input type="text" id="trip-customer" list="customer-datalist" class="form-input" placeholder="Select or type customer name..." value="${existing ? escapeHtml(existing.customerName) : ''}" required />
+              <datalist id="customer-datalist">
+                ${custOptions}
+              </datalist>
             </div>
 
             <div class="form-group">
-              <label class="form-label">From Location</label>
+              <label class="form-label">Consignor (Sender / Dispatcher)</label>
+              <input type="text" id="trip-consignor" class="form-input" placeholder="e.g. Tata Steel Yard, Mumbai" value="${existing ? escapeHtml(existing.consignor || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Consignee (Receiver / Destination)</label>
+              <input type="text" id="trip-consignee" class="form-input" placeholder="e.g. Delhi Metro Project" value="${existing ? escapeHtml(existing.consignee || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">From City / Origin</label>
               <input type="text" id="trip-from" class="form-input" placeholder="e.g. Mumbai" value="${existing ? escapeHtml(existing.fromLocation) : ''}" required />
             </div>
 
             <div class="form-group">
-              <label class="form-label">To Location</label>
+              <label class="form-label">To City / Destination</label>
               <input type="text" id="trip-to" class="form-input" placeholder="e.g. Delhi" value="${existing ? escapeHtml(existing.toLocation) : ''}" required />
             </div>
 
             <div class="form-group">
-              <label class="form-label">Vehicle Number</label>
-              <input type="text" id="trip-vehicle" class="form-input" placeholder="e.g. MH 12 AB 1234" value="${existing ? escapeHtml(existing.vehicleNumber) : ''}" required />
+              <label class="form-label">Vehicle Registration Number</label>
+              <input type="text" id="trip-vehicle" list="vehicle-datalist" class="form-input" placeholder="e.g. MH 12 AB 1234" value="${existing ? escapeHtml(existing.vehicleNumber) : ''}" required />
+              <datalist id="vehicle-datalist">
+                ${vehOptions}
+              </datalist>
             </div>
 
             <div class="form-group">
+              <label class="form-label">Driver Name</label>
+              <input type="text" id="trip-driver" list="driver-datalist" class="form-input" placeholder="Assigned driver..." value="${existing ? escapeHtml(existing.driverName || '') : ''}" />
+              <datalist id="driver-datalist">
+                ${drivOptions}
+              </datalist>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">E-Way Bill Number</label>
+              <input type="text" id="trip-eway" class="form-input" placeholder="12 digit E-Way Bill" value="${existing ? escapeHtml(existing.ewayBillNo || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Weight (Metric Tons)</label>
+              <input type="number" id="trip-weight" step="0.1" class="form-input" placeholder="e.g. 15.5" value="${existing ? existing.weightTons : ''}" />
+            </div>
+
+            <!-- Financials -->
+            <div class="form-group">
               <label class="form-label">Total Freight Amount (₹)</label>
-              <input type="number" id="trip-amount" class="form-input" placeholder="e.g. 45000" value="${existing ? existing.amount : ''}" min="0" required />
+              <input type="number" id="trip-amount" class="form-input" placeholder="e.g. 45000" value="${existing ? existing.amount : ''}" required />
             </div>
 
             <div class="form-group">
               <label class="form-label">Payment Status</label>
-              <select id="trip-status" class="form-select" required>
-                <option value="Paid" ${existing && existing.status === 'Paid' ? 'selected' : ''}>Paid</option>
-                <option value="Pending" ${!existing || existing.status === 'Pending' ? 'selected' : ''}>Pending</option>
-                <option value="Partial" ${existing && existing.status === 'Partial' ? 'selected' : ''}>Partial</option>
+              <select id="trip-status" class="form-select">
+                <option value="Pending" ${existing && existing.status === 'Pending' ? 'selected' : ''}>Pending (Unpaid)</option>
+                <option value="Partial" ${existing && existing.status === 'Partial' ? 'selected' : ''}>Partial (Advance Received)</option>
+                <option value="Paid" ${existing && existing.status === 'Paid' ? 'selected' : ''}>Paid (Full Cleared)</option>
               </select>
             </div>
 
-            <div class="form-group" id="group-paid-amount" style="display: ${existing && existing.status === 'Partial' ? 'flex' : 'none'};">
-              <label class="form-label">Paid Amount (₹)</label>
-              <input type="number" id="trip-paid-amount" class="form-input" placeholder="Amount paid so far" value="${existing ? existing.paidAmount : 0}" min="0" />
+            <div class="form-group" id="group-paid-amount">
+              <label class="form-label">Advance / Paid Amount (₹)</label>
+              <input type="number" id="trip-paid" class="form-input" placeholder="0" value="${existing ? existing.paidAmount : '0'}" />
             </div>
 
-            <!-- EXPENSE BREAKDOWN SECTION -->
-            <div class="form-group-full expense-section-card">
-              <div class="expense-title">
-                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-                Trip Expenses & Net Profit Breakdown
-              </div>
-              <div class="form-grid">
-                <div class="form-group">
-                  <label class="form-label">Diesel / Fuel (₹)</label>
-                  <input type="number" id="trip-fuel" class="form-input" placeholder="0" value="${existing ? existing.fuelCost || 0 : ''}" min="0" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Driver Salary / Allowance (₹)</label>
-                  <input type="number" id="trip-driver" class="form-input" placeholder="0" value="${existing ? existing.driverCost || 0 : ''}" min="0" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Toll & Permit (₹)</label>
-                  <input type="number" id="trip-toll" class="form-input" placeholder="0" value="${existing ? existing.tollCost || 0 : ''}" min="0" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Maintenance / Misc (₹)</label>
-                  <input type="number" id="trip-other-exp" class="form-input" placeholder="0" value="${existing ? existing.otherExpense || 0 : ''}" min="0" />
-                </div>
-              </div>
+            <!-- Trip Expenses Breakdown -->
+            <div class="form-group form-group-full" style="margin-top: 6px;">
+              <span class="form-label" style="font-weight: 700;">Trip Operating Expenses (Diesel, Driver, Toll)</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Diesel / Fuel Cost (₹)</label>
+              <input type="number" id="trip-fuel" class="form-input" placeholder="0" value="${existing ? existing.fuelCost : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Driver Bhatta / Expense (₹)</label>
+              <input type="number" id="trip-driver-cost" class="form-input" placeholder="0" value="${existing ? existing.driverCost : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Toll Tax (₹)</label>
+              <input type="number" id="trip-toll" class="form-input" placeholder="0" value="${existing ? existing.tollCost : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Other Expense / Maintenance (₹)</label>
+              <input type="number" id="trip-other" class="form-input" placeholder="0" value="${existing ? existing.otherExpense : ''}" />
             </div>
 
             <div class="form-group form-group-full">
-              <label class="form-label">Notes / Goods Details</label>
-              <textarea id="trip-notes" class="form-textarea" rows="2" placeholder="e.g. 15 Tons Steel Pipes, Lorry Receipt #45892">${existing ? escapeHtml(existing.notes) : ''}</textarea>
+              <label class="form-label">Goods Description / Notes</label>
+              <textarea id="trip-notes" class="form-textarea" rows="2" placeholder="e.g. 15 Tons TMT Steel Bars">${existing ? escapeHtml(existing.notes || '') : ''}</textarea>
             </div>
           </div>
         </div>
 
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" onclick="window.closeModal()">Cancel</button>
-          <button type="submit" class="btn btn-orange">${existing ? 'Update Trip' : 'Save Trip Record'}</button>
+          <button type="submit" class="btn btn-primary">${existing ? 'Update Trip Record' : 'Save Trip Entry'}</button>
         </div>
       </form>
     </div>
@@ -1045,40 +1933,51 @@ function openTripModal(tripId = null) {
   const modalBackdrop = document.getElementById('modal-backdrop');
   modalBackdrop.innerHTML = modalHtml;
   modalBackdrop.classList.add('open');
-  window.closeModal = closeModal;
 
-  // Form Status change toggle paid amount
-  const statusSelect = document.getElementById('trip-status');
-  const paidGroup = document.getElementById('group-paid-amount');
-  statusSelect.addEventListener('change', () => {
-    paidGroup.style.display = statusSelect.value === 'Partial' ? 'flex' : 'none';
+  // Auto handle status switch
+  const statusEl = document.getElementById('trip-status');
+  const amountEl = document.getElementById('trip-amount');
+  const paidEl = document.getElementById('trip-paid');
+
+  statusEl.addEventListener('change', () => {
+    if (statusEl.value === 'Paid') {
+      paidEl.value = amountEl.value || 0;
+    } else if (statusEl.value === 'Pending') {
+      paidEl.value = 0;
+    }
   });
 
-  // Submit Handler
-  document.getElementById('trip-form').addEventListener('submit', (e) => {
+  document.getElementById('trip-modal-form').addEventListener('submit', async (e) => {
     e.preventDefault();
+
     const tripData = {
       date: document.getElementById('trip-date').value,
+      lrNumber: document.getElementById('trip-lr').value,
       customerName: document.getElementById('trip-customer').value,
+      consignor: document.getElementById('trip-consignor').value,
+      consignee: document.getElementById('trip-consignee').value,
       fromLocation: document.getElementById('trip-from').value,
       toLocation: document.getElementById('trip-to').value,
       vehicleNumber: document.getElementById('trip-vehicle').value,
-      amount: document.getElementById('trip-amount').value,
+      driverName: document.getElementById('trip-driver').value,
+      ewayBillNo: document.getElementById('trip-eway').value,
+      weightTons: Number(document.getElementById('trip-weight').value) || 0,
+      amount: Number(document.getElementById('trip-amount').value) || 0,
+      paidAmount: Number(document.getElementById('trip-paid').value) || 0,
       status: document.getElementById('trip-status').value,
-      paidAmount: document.getElementById('trip-paid-amount').value,
-      fuelCost: document.getElementById('trip-fuel').value,
-      driverCost: document.getElementById('trip-driver').value,
-      tollCost: document.getElementById('trip-toll').value,
-      otherExpense: document.getElementById('trip-other-exp').value,
+      fuelCost: Number(document.getElementById('trip-fuel').value) || 0,
+      driverCost: Number(document.getElementById('trip-driver-cost').value) || 0,
+      tollCost: Number(document.getElementById('trip-toll').value) || 0,
+      otherExpense: Number(document.getElementById('trip-other').value) || 0,
       notes: document.getElementById('trip-notes').value
     };
 
     if (state.editingTripId) {
-      updateTrip(state.editingTripId, tripData);
-      showToast('Trip & Expense record updated!', 'success');
+      await updateTrip(state.editingTripId, tripData);
+      showToast('Trip record updated successfully', 'success');
     } else {
-      saveTrip(tripData);
-      showToast('New trip recorded successfully!', 'success');
+      await saveTrip(tripData);
+      showToast('New trip recorded successfully', 'success');
     }
 
     closeModal();
@@ -1087,79 +1986,466 @@ function openTripModal(tripId = null) {
   });
 }
 
-// OPEN PRINTABLE LORRY RECEIPT (LR) / INVOICE MODAL
+// 2. ADD / EDIT VEHICLE MODAL
+function openVehicleModal(vehicleId = null) {
+  state.editingVehicleId = vehicleId;
+  const existing = vehicleId ? state.vehicles.find(v => v.id === vehicleId) : null;
+
+  const modalHtml = `
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>${existing ? 'Edit Vehicle & Document Compliance' : 'Register New Fleet Vehicle'}</h3>
+        <button class="btn-close-modal" onclick="window.closeModal()">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <form id="vehicle-modal-form">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Vehicle Registration Number</label>
+              <input type="text" id="veh-num" class="form-input" placeholder="e.g. MH 12 AB 1234" value="${existing ? escapeHtml(existing.vehicleNumber) : ''}" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Make & Model</label>
+              <input type="text" id="veh-model" class="form-input" placeholder="e.g. Tata Signa 2823.K" value="${existing ? escapeHtml(existing.makeModel || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Vehicle Type</label>
+              <select id="veh-type" class="form-select">
+                <option value="10 Wheeler Truck" ${existing && existing.vehicleType === '10 Wheeler Truck' ? 'selected' : ''}>10 Wheeler Truck</option>
+                <option value="6 Wheeler Truck" ${existing && existing.vehicleType === '6 Wheeler Truck' ? 'selected' : ''}>6 Wheeler Truck</option>
+                <option value="12 Wheeler Heavy" ${existing && existing.vehicleType === '12 Wheeler Heavy' ? 'selected' : ''}>12 Wheeler Heavy</option>
+                <option value="Multi-Axle Trailer" ${existing && existing.vehicleType === 'Multi-Axle Trailer' ? 'selected' : ''}>Multi-Axle Trailer</option>
+                <option value="Mini Truck" ${existing && existing.vehicleType === 'Mini Truck' ? 'selected' : ''}>Mini Truck (Tata 407/Bolero)</option>
+                <option value="Container Truck" ${existing && existing.vehicleType === 'Container Truck' ? 'selected' : ''}>Container Truck</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Gross Capacity (Tons)</label>
+              <input type="number" id="veh-cap" step="0.5" class="form-input" placeholder="e.g. 16" value="${existing ? existing.capacityTons : '16'}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Fleet Ownership</label>
+              <select id="veh-owner" class="form-select">
+                <option value="Owned" ${existing && existing.ownership === 'Owned' ? 'selected' : ''}>Owned Fleet</option>
+                <option value="Attached" ${existing && existing.ownership === 'Attached' ? 'selected' : ''}>Attached / Market Truck</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Assigned Driver Name</label>
+              <input type="text" id="veh-driver" class="form-input" placeholder="Driver name" value="${existing ? escapeHtml(existing.driverName || '') : ''}" />
+            </div>
+
+            <!-- Document Compliance Expiries -->
+            <div class="form-group form-group-full" style="margin-top: 6px;">
+              <span class="form-label" style="font-weight: 700; color: var(--primary-700);">Statutory Compliance & Expiry Dates</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Fitness Certificate Expiry</label>
+              <input type="date" id="veh-fitness" class="form-input" value="${existing ? existing.fitnessExpiry : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Insurance Policy Expiry</label>
+              <input type="date" id="veh-insurance" class="form-input" value="${existing ? existing.insuranceExpiry : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">National Permit Expiry</label>
+              <input type="date" id="veh-permit" class="form-input" value="${existing ? existing.permitExpiry : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">PUC (Pollution) Expiry</label>
+              <input type="date" id="veh-puc" class="form-input" value="${existing ? existing.pucExpiry : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Vehicle Operating Status</label>
+              <select id="veh-status" class="form-select">
+                <option value="Active" ${existing && existing.status === 'Active' ? 'selected' : ''}>Active (On Duty)</option>
+                <option value="In Maintenance" ${existing && existing.status === 'In Maintenance' ? 'selected' : ''}>In Maintenance / Garage</option>
+                <option value="Inactive" ${existing && existing.status === 'Inactive' ? 'selected' : ''}>Inactive / Idle</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="window.closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">${existing ? 'Update Vehicle' : 'Register Vehicle'}</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  modalBackdrop.innerHTML = modalHtml;
+  modalBackdrop.classList.add('open');
+
+  document.getElementById('vehicle-modal-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const data = {
+      vehicleNumber: document.getElementById('veh-num').value,
+      makeModel: document.getElementById('veh-model').value,
+      vehicleType: document.getElementById('veh-type').value,
+      capacityTons: Number(document.getElementById('veh-cap').value) || 16,
+      ownership: document.getElementById('veh-owner').value,
+      driverName: document.getElementById('veh-driver').value,
+      fitnessExpiry: document.getElementById('veh-fitness').value,
+      insuranceExpiry: document.getElementById('veh-insurance').value,
+      permitExpiry: document.getElementById('veh-permit').value,
+      pucExpiry: document.getElementById('veh-puc').value,
+      status: document.getElementById('veh-status').value
+    };
+
+    if (state.editingVehicleId) {
+      await updateVehicle(state.editingVehicleId, data);
+      showToast('Vehicle updated successfully', 'success');
+    } else {
+      await saveVehicle(data);
+      showToast('New vehicle registered in fleet', 'success');
+    }
+
+    closeModal();
+    loadState();
+    renderCurrentTab();
+  });
+}
+
+// 3. ADD / EDIT DRIVER MODAL
+function openDriverModal(driverId = null) {
+  state.editingDriverId = driverId;
+  const existing = driverId ? state.drivers.find(d => d.id === driverId) : null;
+
+  const modalHtml = `
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>${existing ? 'Edit Driver Profile' : 'Add New Driver / Staff'}</h3>
+        <button class="btn-close-modal" onclick="window.closeModal()">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <form id="driver-modal-form">
+        <div class="modal-body">
+          <div class="form-grid">
+            <div class="form-group form-group-full">
+              <label class="form-label">Driver Full Name</label>
+              <input type="text" id="driv-name" class="form-input" placeholder="e.g. Rajesh Yadav" value="${existing ? escapeHtml(existing.name) : ''}" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Mobile Phone Number</label>
+              <input type="text" id="driv-phone" class="form-input" placeholder="+91 98221 11223" value="${existing ? escapeHtml(existing.phone || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Driving License Number</label>
+              <input type="text" id="driv-lic" class="form-input" placeholder="e.g. MH-1420150001234" value="${existing ? escapeHtml(existing.licenseNumber || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Assigned Vehicle Plate</label>
+              <input type="text" id="driv-truck" class="form-input" placeholder="e.g. MH 12 AB 1234" value="${existing ? escapeHtml(existing.assignedVehicle || '') : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Monthly Salary (₹)</label>
+              <input type="number" id="driv-salary" class="form-input" placeholder="e.g. 22000" value="${existing ? existing.monthlySalary : ''}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Initial Kharacha / Advance Due (₹)</label>
+              <input type="number" id="driv-adv" class="form-input" placeholder="0" value="${existing ? existing.advanceBalance : '0'}" />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Availability Status</label>
+              <select id="driv-status" class="form-select">
+                <option value="Available" ${existing && existing.status === 'Available' ? 'selected' : ''}>Available</option>
+                <option value="On Trip" ${existing && existing.status === 'On Trip' ? 'selected' : ''}>On Trip</option>
+                <option value="On Leave" ${existing && existing.status === 'On Leave' ? 'selected' : ''}>On Leave</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="window.closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">${existing ? 'Update Driver' : 'Save Driver'}</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  modalBackdrop.innerHTML = modalHtml;
+  modalBackdrop.classList.add('open');
+
+  document.getElementById('driver-modal-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const data = {
+      name: document.getElementById('driv-name').value,
+      phone: document.getElementById('driv-phone').value,
+      licenseNumber: document.getElementById('driv-lic').value,
+      assignedVehicle: document.getElementById('driv-truck').value,
+      monthlySalary: Number(document.getElementById('driv-salary').value) || 0,
+      advanceBalance: Number(document.getElementById('driv-adv').value) || 0,
+      status: document.getElementById('driv-status').value
+    };
+
+    if (state.editingDriverId) {
+      await updateDriver(state.editingDriverId, data);
+      showToast('Driver profile updated', 'success');
+    } else {
+      await saveDriver(data);
+      showToast('Driver registered successfully', 'success');
+    }
+
+    closeModal();
+    loadState();
+    renderCurrentTab();
+  });
+}
+
+// 4. DRIVER KHARACHA / ADVANCE MODAL
+function openDriverAdvanceModal(driverId, type = 'advance') {
+  const driver = state.drivers.find(d => d.id === driverId);
+  if (!driver) return;
+
+  const currentBal = Number(driver.advanceBalance) || 0;
+  const isAdvance = type === 'advance';
+
+  const modalHtml = `
+    <div class="modal-card" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3>${isAdvance ? 'Disburse Trip Advance / Kharacha' : 'Settle Driver Advance'}</h3>
+        <button class="btn-close-modal" onclick="window.closeModal()">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <form id="driver-advance-form">
+        <div class="modal-body">
+          <div style="background: var(--slate-50); padding: 14px; border-radius: var(--radius-md); margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <div style="font-weight: 700; color: var(--slate-900);">${escapeHtml(driver.name)}</div>
+              <div style="font-size: 0.8rem; color: var(--slate-500);">${escapeHtml(driver.assignedVehicle || 'No truck')}</div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-size: 0.72rem; color: var(--slate-500); text-transform: uppercase;">Current Balance Due</div>
+              <div style="font-size: 1.15rem; font-weight: 800; color: #c2410c;">${formatRupee(currentBal)}</div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">${isAdvance ? 'Advance Amount Given (₹)' : 'Settlement Amount Deducted (₹)'}</label>
+            <input type="number" id="adv-amount" class="form-input" placeholder="e.g. 2000" min="1" required autofocus />
+          </div>
+
+          <!-- Quick Chips -->
+          <div style="display: flex; gap: 8px; margin-top: 10px; margin-bottom: 16px;">
+            <button type="button" class="btn btn-outline btn-sm quick-amt" data-amt="1000">₹1,000</button>
+            <button type="button" class="btn btn-outline btn-sm quick-amt" data-amt="2000">₹2,000</button>
+            <button type="button" class="btn btn-outline btn-sm quick-amt" data-amt="3000">₹3,000</button>
+            <button type="button" class="btn btn-outline btn-sm quick-amt" data-amt="5000">₹5,000</button>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Trip / Reason Note</label>
+            <input type="text" id="adv-note" class="form-input" placeholder="e.g. Diesel, Enroute toll & food expense" />
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="window.closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">${isAdvance ? 'Confirm & Give Advance' : 'Confirm Settlement'}</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  modalBackdrop.innerHTML = modalHtml;
+  modalBackdrop.classList.add('open');
+
+  const amtInput = document.getElementById('adv-amount');
+  document.querySelectorAll('.quick-amt').forEach(btn => {
+    btn.addEventListener('click', () => {
+      amtInput.value = btn.getAttribute('data-amt');
+    });
+  });
+
+  document.getElementById('driver-advance-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const amount = Number(amtInput.value) || 0;
+    if (amount <= 0) return;
+
+    await recordDriverAdvance(driverId, amount, type);
+    showToast(isAdvance ? `₹${amount} advance recorded for ${driver.name}` : `₹${amount} advance settled for ${driver.name}`, 'success');
+
+    closeModal();
+    loadState();
+    renderCurrentTab();
+  });
+}
+
+// 5. PRINTABLE LORRY RECEIPT (LR) & DYNAMIC UPI QR INVOICE MODAL
 function openPrintReceiptModal(tripId) {
   const trip = state.trips.find(t => t.id === tripId);
   if (!trip) return;
 
   const s = state.settings;
   const pending = trip.amount - (trip.paidAmount || (trip.status === 'Paid' ? trip.amount : 0));
+  const lrDisplay = trip.lrNumber || `LR-2026-${String(trip.id).slice(-4)}`;
+
+  // Generate dynamic QR code URL for UPI payment
+  const upiQrUrl = s.upiId ? generateUpiQrCodeUrl(s.upiId, s.businessName, pending, `Payment for ${lrDisplay}`) : '';
+  const upiPayLink = s.upiId ? generateUpiPayLink(s.upiId, s.businessName, pending, `Payment for ${lrDisplay}`) : '';
+
+  // WhatsApp share link
+  const cust = state.customers.find(c => c.name.toLowerCase() === trip.customerName.toLowerCase());
+  const phone = cust ? cust.phone : '';
+  const waShareUrl = generateWhatsAppReminderLink(phone, trip.customerName, pending, trip, s);
 
   const modalHtml = `
-    <div class="modal-card" style="max-width: 750px;">
+    <div class="modal-card" style="max-width: 780px;">
       <div class="modal-header">
-        <h3>Lorry Receipt (LR) & Invoice Bill</h3>
+        <h3>Lorry Receipt (LR) &amp; Consignment Bilty</h3>
         <button class="btn-close-modal" onclick="window.closeModal()">
           <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
 
-      <div class="modal-body">
-        <div class="print-invoice-wrapper">
-          <div class="invoice-header">
+      <div class="modal-body" style="padding: 0;">
+        <div class="print-invoice-wrapper" id="printable-lr-content" style="padding: 24px;">
+          
+          <!-- Top Transporter Banner -->
+          <div class="invoice-header" style="border-bottom: 2px solid var(--slate-900); padding-bottom: 16px; margin-bottom: 16px;">
             <div class="invoice-title-block">
-              <h2>${escapeHtml(s.businessName || 'Transport Ledger')}</h2>
-              <p>Fleet Owner & Transport Contractor</p>
-              <p style="font-size: 0.8rem; color: #64748b;">${escapeHtml(s.city || '')} • Phone: ${escapeHtml(s.phone || '')}</p>
-              ${s.gstin ? `<p style="font-size: 0.78rem; font-family: monospace;">GSTIN: ${escapeHtml(s.gstin)}</p>` : ''}
+              <h2 style="font-size: 1.45rem; font-weight: 800; color: var(--primary-800);">${escapeHtml(s.businessName || 'Transport Ledger')}</h2>
+              <p style="font-size: 0.88rem; font-weight: 600;">Fleet Owners, Transport Contractors &amp; Heavy Freight Logistics</p>
+              <p style="font-size: 0.8rem; color: var(--slate-600);">${escapeHtml(s.address || '')} • ${escapeHtml(s.city || '')}</p>
+              <div style="font-size: 0.8rem; display: flex; gap: 14px; margin-top: 4px; font-weight: 600;">
+                <span>Phone: ${escapeHtml(s.phone || '')}</span>
+                ${s.gstin ? `<span>GSTIN: <code>${escapeHtml(s.gstin)}</code></span>` : ''}
+                ${s.pan ? `<span>PAN: <code>${escapeHtml(s.pan)}</code></span>` : ''}
+              </div>
             </div>
-            <div class="invoice-meta">
-              <div class="invoice-lr-no">LR NO: #${trip.id.substring(trip.id.length - 6).toUpperCase()}</div>
-              <p style="font-size: 0.85rem; font-weight: 600;">Date: ${formatDate(trip.date)}</p>
-            </div>
-          </div>
-
-          <div class="invoice-details-grid">
-            <div>
-              <span style="font-size: 0.75rem; color: #64748b; font-weight: 700; text-transform: uppercase;">Billed To Customer</span>
-              <h4 style="font-size: 1.05rem; font-weight: 700; margin-top: 4px;">${escapeHtml(trip.customerName)}</h4>
-            </div>
-            <div>
-              <span style="font-size: 0.75rem; color: #64748b; font-weight: 700; text-transform: uppercase;">Route & Vehicle</span>
-              <p style="font-size: 0.95rem; font-weight: 700; margin-top: 4px;">${escapeHtml(trip.fromLocation)} ➔ ${escapeHtml(trip.toLocation)}</p>
-              <p style="font-size: 0.85rem; font-family: monospace;">Vehicle: ${escapeHtml(trip.vehicleNumber)}</p>
+            <div class="invoice-meta" style="text-align: right;">
+              <div class="invoice-lr-no" style="font-size: 1.15rem; font-weight: 800; background: var(--primary-900); color:#ffffff; padding: 4px 12px; border-radius: 6px; display: inline-block;">
+                ${escapeHtml(lrDisplay)}
+              </div>
+              <p style="font-size: 0.88rem; font-weight: 700; margin-top: 6px;">Date: ${formatDate(trip.date)}</p>
+              ${trip.ewayBillNo ? `<p style="font-size: 0.78rem; font-family: monospace;">E-Way: ${escapeHtml(trip.ewayBillNo)}</p>` : ''}
             </div>
           </div>
 
-          <table class="data-table" style="margin-bottom: 20px;">
+          <!-- Consignor & Consignee Details -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; border: 1px solid var(--slate-300); border-radius: 8px; padding: 12px;">
+            <div>
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Consignor (Sender)</span>
+              <h4 style="font-size: 1rem; font-weight: 700; margin-top: 2px;">${escapeHtml(trip.consignor || trip.customerName)}</h4>
+              <p style="font-size: 0.85rem; color: var(--slate-600);">Origin: <strong>${escapeHtml(trip.fromLocation)}</strong></p>
+            </div>
+            <div>
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Consignee (Receiver / Deliver To)</span>
+              <h4 style="font-size: 1rem; font-weight: 700; margin-top: 2px;">${escapeHtml(trip.consignee || trip.customerName)}</h4>
+              <p style="font-size: 0.85rem; color: var(--slate-600);">Destination: <strong>${escapeHtml(trip.toLocation)}</strong></p>
+            </div>
+          </div>
+
+          <!-- Vehicle & Driver Details Row -->
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; background: var(--slate-50); padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 0.85rem;">
+            <div>Vehicle: <strong>${escapeHtml(trip.vehicleNumber)}</strong></div>
+            <div>Driver: <strong>${escapeHtml(trip.driverName || 'As Assigned')}</strong></div>
+            <div>Weight: <strong>${trip.weightTons ? `${trip.weightTons} Tons` : 'Full Truck Load'}</strong></div>
+            <div>Route: <strong>${escapeHtml(trip.fromLocation)} ➔ ${escapeHtml(trip.toLocation)}</strong></div>
+          </div>
+
+          <!-- Freight Accounting Table -->
+          <table class="data-table" style="margin-bottom: 16px; border: 1px solid var(--slate-200);">
             <thead>
-              <tr>
-                <th>Description / Goods</th>
-                <th style="text-align: right;">Total Amount</th>
-                <th style="text-align: right;">Advance Paid</th>
-                <th style="text-align: right;">Balance Due</th>
+              <tr style="background: var(--slate-100);">
+                <th>Description / Goods Carried</th>
+                <th style="text-align: right;">Total Freight (₹)</th>
+                <th style="text-align: right;">Advance Paid (₹)</th>
+                <th style="text-align: right;">Balance Payable (₹)</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>${escapeHtml(trip.notes || 'Freight Transport Charges')}</td>
+                <td><strong>${escapeHtml(trip.notes || 'Commercial Goods Freight Transportation')}</strong></td>
                 <td style="text-align: right;"><strong>${formatRupee(trip.amount)}</strong></td>
                 <td style="text-align: right; color: #047857;">${formatRupee(trip.paidAmount || (trip.status === 'Paid' ? trip.amount : 0))}</td>
-                <td style="text-align: right; color: #c2410c;"><strong>${formatRupee(pending)}</strong></td>
+                <td style="text-align: right; color: #c2410c; font-size: 1.05rem;"><strong>${formatRupee(pending)}</strong></td>
               </tr>
             </tbody>
           </table>
 
-          <div class="invoice-signatures">
-            <div class="sig-box">Consignor / Customer Sign</div>
-            <div class="sig-box">For ${escapeHtml(s.businessName || 'Transport Co.')}</div>
+          <!-- Dynamic UPI QR & Payment Settlement Block -->
+          <div style="display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: center; border: 1.5px solid var(--slate-300); border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #ffffff;">
+            <div>
+              <h4 style="font-size: 0.95rem; font-weight: 700; color: var(--slate-900);">Bank &amp; Instant UPI Payment</h4>
+              <p style="font-size: 0.8rem; color: var(--slate-500); margin-top: 2px;">
+                Scan QR with PhonePe, Google Pay, or Paytm for instant bank clearance
+              </p>
+              ${s.upiId ? `<div style="font-size: 0.85rem; font-family: monospace; font-weight: 700; margin-top: 6px; color: var(--primary-700);">UPI VPA: ${escapeHtml(s.upiId)}</div>` : ''}
+              ${s.bankName && s.accountNumber ? `
+                <div style="font-size: 0.8rem; color: var(--slate-600); margin-top: 4px;">
+                  ${escapeHtml(s.bankName)} • A/C: <strong>${escapeHtml(s.accountNumber)}</strong> • IFSC: <strong>${escapeHtml(s.ifscCode || '')}</strong>
+                </div>
+              ` : ''}
+              <div style="font-size: 0.75rem; color: var(--slate-500); margin-top: 8px;">
+                *GST Reverse Charge (GTA RCM 5%) applies to registered consignors/consignees as per GST laws.
+              </div>
+            </div>
+
+            <!-- Dynamic QR Code -->
+            ${upiQrUrl && pending > 0 ? `
+              <div style="text-align: center;">
+                <img src="${upiQrUrl}" alt="UPI Payment QR Code" style="width: 120px; height: 120px; display: block; border: 1px solid var(--slate-300); border-radius: 6px; padding: 4px; background: #ffffff;" />
+                <span style="font-size: 0.7rem; font-weight: 700; color: #047857; display: block; margin-top: 4px;">SCAN &amp; PAY ${formatRupee(pending)}</span>
+              </div>
+            ` : ''}
           </div>
+
+          <!-- Terms & Signatures -->
+          <div style="font-size: 0.72rem; color: var(--slate-500); margin-bottom: 24px; line-height: 1.4;">
+            <strong>Standard GTA Terms:</strong> 1. Goods carried strictly at owner's risk. 2. Demurrage charged after 24 hrs. 3. Subject to local jurisdiction.
+          </div>
+
+          <div class="invoice-signatures" style="display: flex; justify-content: space-between; margin-top: 20px;">
+            <div class="sig-box" style="width: 220px; border-top: 1px solid var(--slate-400); padding-top: 6px; text-align: center; font-size: 0.82rem;">
+              Consignor / Driver Signature
+            </div>
+            <div class="sig-box" style="width: 220px; border-top: 1px solid var(--slate-400); padding-top: 6px; text-align: center; font-size: 0.82rem; font-weight: 700;">
+              For ${escapeHtml(s.businessName || 'Transport Co.')}
+            </div>
+          </div>
+
         </div>
       </div>
 
       <div class="modal-footer">
+        <a href="${waShareUrl}" target="_blank" class="btn btn-whatsapp">
+          Share on WhatsApp
+        </a>
         <button class="btn btn-secondary" onclick="window.closeModal()">Close</button>
-        <button class="btn btn-primary" onclick="window.print()">Print Receipt (PDF)</button>
+        <button class="btn btn-primary" onclick="window.print()">
+          Print Receipt (PDF)
+        </button>
       </div>
     </div>
   `;
@@ -1167,10 +2453,9 @@ function openPrintReceiptModal(tripId) {
   const modalBackdrop = document.getElementById('modal-backdrop');
   modalBackdrop.innerHTML = modalHtml;
   modalBackdrop.classList.add('open');
-  window.closeModal = closeModal;
 }
 
-// OPEN ADD/EDIT CUSTOMER MODAL
+// 6. CUSTOMER ACCOUNT MODAL
 function openCustomerModal(customerId = null) {
   state.editingCustomerId = customerId;
   const existing = customerId ? state.customers.find(c => c.id === customerId) : null;
@@ -1184,27 +2469,27 @@ function openCustomerModal(customerId = null) {
         </button>
       </div>
 
-      <form id="customer-form">
+      <form id="customer-modal-form">
         <div class="modal-body">
           <div class="form-grid">
             <div class="form-group form-group-full">
-              <label class="form-label">Customer / Company Name</label>
+              <label class="form-label">Customer / Party Name</label>
               <input type="text" id="cust-name" class="form-input" placeholder="e.g. Sharma Freight Carriers" value="${existing ? escapeHtml(existing.name) : ''}" required />
             </div>
 
             <div class="form-group">
               <label class="form-label">Phone / Mobile</label>
-              <input type="text" id="cust-phone" class="form-input" placeholder="e.g. +91 98200 12345" value="${existing ? escapeHtml(existing.phone) : ''}" />
+              <input type="text" id="cust-phone" class="form-input" placeholder="e.g. +91 98200 12345" value="${existing ? escapeHtml(existing.phone || '') : ''}" />
             </div>
 
             <div class="form-group">
-              <label class="form-label">City / State</label>
-              <input type="text" id="cust-city" class="form-input" placeholder="e.g. Mumbai, Maharashtra" value="${existing ? escapeHtml(existing.city) : ''}" />
+              <label class="form-label">City, State</label>
+              <input type="text" id="cust-city" class="form-input" placeholder="e.g. Mumbai, Maharashtra" value="${existing ? escapeHtml(existing.city || '') : ''}" />
             </div>
 
             <div class="form-group form-group-full">
-              <label class="form-label">GSTIN Number (Optional)</label>
-              <input type="text" id="cust-gstin" class="form-input" placeholder="e.g. 27AAAAA0000A1Z5" value="${existing ? escapeHtml(existing.gstin) : ''}" />
+              <label class="form-label">GSTIN (Optional)</label>
+              <input type="text" id="cust-gstin" class="form-input" placeholder="e.g. 27AABCS123411Z5" value="${existing ? escapeHtml(existing.gstin || '') : ''}" />
             </div>
           </div>
         </div>
@@ -1220,9 +2505,8 @@ function openCustomerModal(customerId = null) {
   const modalBackdrop = document.getElementById('modal-backdrop');
   modalBackdrop.innerHTML = modalHtml;
   modalBackdrop.classList.add('open');
-  window.closeModal = closeModal;
 
-  document.getElementById('customer-form').addEventListener('submit', (e) => {
+  document.getElementById('customer-modal-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const data = {
       name: document.getElementById('cust-name').value,
@@ -1232,10 +2516,10 @@ function openCustomerModal(customerId = null) {
     };
 
     if (state.editingCustomerId) {
-      updateCustomer(state.editingCustomerId, data);
-      showToast('Customer updated', 'success');
+      await updateCustomer(state.editingCustomerId, data);
+      showToast('Customer account updated', 'success');
     } else {
-      saveCustomer(data);
+      await saveCustomer(data);
       showToast('Customer account created', 'success');
     }
 
@@ -1245,7 +2529,7 @@ function openCustomerModal(customerId = null) {
   });
 }
 
-// OPEN STATEMENT MODAL FOR A CUSTOMER
+// 7. CUSTOMER STATEMENT MODAL
 function openStatementModal(customerName) {
   state.viewingCustomerStatement = customerName;
   const customerTrips = state.trips.filter(t => t.customerName.toLowerCase() === customerName.toLowerCase());
@@ -1260,12 +2544,12 @@ function openStatementModal(customerName) {
     paidAmt += paid;
   });
   const pendingAmt = totalAmt - paidAmt;
-  const waUrl = pendingAmt > 0 ? generateWhatsAppReminderLink(phone, customerName, pendingAmt, null, state.settings.businessName) : null;
+  const waUrl = pendingAmt > 0 ? generateWhatsAppReminderLink(phone, customerName, pendingAmt, null, state.settings) : null;
 
   const rows = customerTrips.map(t => `
     <tr>
       <td><strong>${formatDate(t.date)}</strong></td>
-      <td>${escapeHtml(t.fromLocation)} -> ${escapeHtml(t.toLocation)}</td>
+      <td>${escapeHtml(t.fromLocation)} ➔ ${escapeHtml(t.toLocation)}</td>
       <td><span class="vehicle-tag">${escapeHtml(t.vehicleNumber)}</span></td>
       <td>${escapeHtml(t.notes || '-')}</td>
       <td><strong>${formatRupee(t.amount)}</strong></td>
@@ -1274,7 +2558,7 @@ function openStatementModal(customerName) {
   `).join('');
 
   const modalHtml = `
-    <div class="modal-card" style="max-width: 800px;">
+    <div class="modal-card" style="max-width: 820px;">
       <div class="modal-header">
         <div>
           <h3 style="margin-bottom: 2px;">Customer Ledger Statement</h3>
@@ -1286,14 +2570,13 @@ function openStatementModal(customerName) {
       </div>
 
       <div class="modal-body">
-        <!-- Summary Cards -->
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; background: var(--slate-50); padding: 16px; border-radius: var(--radius-md);">
           <div>
-            <span style="font-size: 0.75rem; color: var(--slate-500); text-transform: uppercase;">Total Business</span>
+            <span style="font-size: 0.75rem; color: var(--slate-500); text-transform: uppercase;">Total Freight Volume</span>
             <div style="font-size: 1.2rem; font-weight: 800; color: var(--slate-900);">${formatRupee(totalAmt)}</div>
           </div>
           <div>
-            <span style="font-size: 0.75rem; color: var(--slate-500); text-transform: uppercase;">Total Paid</span>
+            <span style="font-size: 0.75rem; color: var(--slate-500); text-transform: uppercase;">Total Cleared</span>
             <div style="font-size: 1.2rem; font-weight: 800; color: #047857;">${formatRupee(paidAmt)}</div>
           </div>
           <div>
@@ -1314,7 +2597,7 @@ function openStatementModal(customerName) {
                 <th>Status</th>
               </tr>
             </thead>
-            <tbody>${rows || '<tr><td colspan="6" style="text-align:center;">No trip history</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="6" style="text-align:center;">No trip history recorded</td></tr>'}</tbody>
           </table>
         </div>
       </div>
@@ -1322,7 +2605,6 @@ function openStatementModal(customerName) {
       <div class="modal-footer">
         ${waUrl ? `<a href="${waUrl}" target="_blank" class="btn btn-whatsapp btn-sm">WhatsApp Reminder</a>` : ''}
         <button id="btn-export-statement-csv" class="btn btn-secondary btn-sm">
-          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
           Export CSV Statement
         </button>
         <button type="button" class="btn btn-primary" onclick="window.closeModal()">Close</button>
@@ -1333,7 +2615,6 @@ function openStatementModal(customerName) {
   const modalBackdrop = document.getElementById('modal-backdrop');
   modalBackdrop.innerHTML = modalHtml;
   modalBackdrop.classList.add('open');
-  window.closeModal = closeModal;
 
   document.getElementById('btn-export-statement-csv').addEventListener('click', () => {
     exportCustomerLedgerToCSV(customerName, state.trips);
@@ -1341,6 +2622,82 @@ function openStatementModal(customerName) {
   });
 }
 
+// 8. DIAGNOSTICS & LAN MOBILE PAIRING MODAL
+function openDiagnosticsModal() {
+  const sync = getSyncStatus();
+  const info = sync.serverInfo || {};
+  const dbInfo = info.database || {};
+  const isOnline = sync.isServerOnline;
+  const isMongo = dbInfo.isMongo;
+
+  const mobileUrls = info.mobileUrls || [];
+  const primaryMobileUrl = mobileUrls.length > 0 ? mobileUrls[0] : window.location.origin;
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=1&data=${encodeURIComponent(primaryMobileUrl)}`;
+
+  const modalHtml = `
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>Server &amp; Cloud Diagnostics</h3>
+        <button class="btn-close-modal" onclick="window.closeModal()">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          
+          <!-- Database Engine Status -->
+          <div style="background: var(--slate-50); border: 1px solid var(--slate-200); padding: 14px; border-radius: var(--radius-md);">
+            <div style="font-size: 0.75rem; color: var(--slate-500); text-transform: uppercase; font-weight: 700;">Database Engine</div>
+            <div style="font-size: 1.05rem; font-weight: 800; color: ${isOnline ? '#047857' : '#c2410c'}; margin-top: 2px;">
+              ${dbInfo.engine || (isOnline ? 'Online Engine' : 'Offline Browser LocalStorage')}
+            </div>
+            <div style="font-size: 0.8rem; color: var(--slate-600); margin-top: 2px;">
+              ${dbInfo.storageLocation || 'Local client storage'}
+            </div>
+          </div>
+
+          <!-- Server Uptime & Port -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 0.85rem;">
+            <div style="background: var(--slate-50); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--slate-200);">
+              <span style="font-size: 0.72rem; color: var(--slate-500);">Server Status:</span>
+              <div style="font-weight: 700; color: ${isOnline ? '#047857' : '#c2410c'};">${isOnline ? 'Active Online' : 'Offline'}</div>
+            </div>
+            <div style="background: var(--slate-50); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--slate-200);">
+              <span style="font-size: 0.72rem; color: var(--slate-500);">Server Version:</span>
+              <div style="font-weight: 700;">v2.0.0 (Enterprise)</div>
+            </div>
+          </div>
+
+          <!-- Mobile Phone LAN Pairing -->
+          <div style="text-align: center; border: 1.5px dashed var(--slate-300); border-radius: var(--radius-md); padding: 16px;">
+            <div style="font-size: 0.88rem; font-weight: 700; color: var(--slate-900);">Instant Mobile Phone Access</div>
+            <p style="font-size: 0.78rem; color: var(--slate-500); margin-top: 2px; margin-bottom: 12px;">
+              Scan with your mobile phone camera while connected to same Wi-Fi
+            </p>
+            <img src="${qrUrl}" alt="Mobile QR Code" style="width: 150px; height: 150px; display: inline-block; border-radius: 8px; border: 1px solid var(--slate-200); padding: 4px; background: #ffffff;" />
+            <div style="font-family: monospace; font-size: 0.82rem; font-weight: 700; color: var(--primary-700); margin-top: 10px;">
+              ${primaryMobileUrl}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" onclick="window.closeModal()">Close</button>
+      </div>
+    </div>
+  `;
+
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  modalBackdrop.innerHTML = modalHtml;
+  modalBackdrop.classList.add('open');
+}
+
+window.openDiagnosticsModal = openDiagnosticsModal;
+
+// Toast Notifications
 function showToast(message, type = 'success') {
   const container = document.getElementById('toast-container');
   if (!container) return;
@@ -1357,7 +2714,7 @@ function showToast(message, type = 'success') {
     toast.style.opacity = '0';
     toast.style.transition = 'opacity 0.3s ease';
     setTimeout(() => toast.remove(), 300);
-  }, 3000);
+  }, 3200);
 }
 
 function escapeHtml(str) {

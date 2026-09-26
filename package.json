@@ -1,0 +1,29 @@
+{
+  "name": "transport-ledger",
+  "version": "2.0.0",
+  "description": "Enterprise Indian Transport Business Ledger, Fleet Management & Freight Accounting System",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "server": "node server.js"
+  },
+  "keywords": [
+    "transport",
+    "logistics",
+    "ledger",
+    "fleet-management",
+    "lorry-receipt",
+    "bilty",
+    "truck-accounting",
+    "india-transport",
+    "gst-rcm"
+  ],
+  "author": "Sanjay Elumalai",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^18.0.4",
+    "mongodb": "^7.6.0"
+  }
+}
