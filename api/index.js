@@ -10,9 +10,18 @@ export default async function handler(req, res) {
     const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost';
     const proto = req.headers['x-forwarded-proto'] || 'https';
     const parsedUrl = new URL(req.url, `${proto}://${host}`);
-    const pathname = parsedUrl.pathname;
-    const method = req.method;
 
+    let pathname = parsedUrl.searchParams.get('__path')
+      || req.headers['x-invoke-path']
+      || req.headers['x-matched-path']
+      || parsedUrl.pathname;
+
+    if (pathname.includes('?')) pathname = pathname.split('?')[0];
+    if (pathname.endsWith('/index.js')) {
+      pathname = pathname.replace('/index.js', '') || '/api';
+    }
+
+    const method = req.method;
     const handled = await handleApiRequest(req, res, pathname, method, [], 443);
     if (!handled) {
       sendError(res, 404, `API endpoint not found: ${method} ${pathname}`);

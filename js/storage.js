@@ -755,8 +755,9 @@ export async function sendBackupToEmail(email) {
         method: 'POST',
         body: JSON.stringify({ email: targetEmail })
       });
-      if (res.ok) {
-        serverData = await res.json();
+      const parsed = await safeParseJsonResponse(res);
+      if (parsed.ok && parsed.data) {
+        serverData = parsed.data;
       }
     } catch (e) {
       console.warn('Server email backup endpoint offline, recording client snapshot:', e);
@@ -792,9 +793,9 @@ export async function getBackupHistory() {
   if (isServerOnline) {
     try {
       const res = await apiFetch('/api/backup/history');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) list = data;
+      const parsed = await safeParseJsonResponse(res);
+      if (parsed.ok && Array.isArray(parsed.data)) {
+        list = parsed.data;
       }
     } catch (e) {
       console.warn('Failed to load server backup history:', e);
@@ -812,6 +813,23 @@ export async function getBackupHistory() {
   } catch (err) {}
 
   return list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+}
+
+// Helper to safely parse JSON HTTP responses without throwing SyntaxErrors on 500/HTML pages
+export async function safeParseJsonResponse(res) {
+  if (!res) return { ok: false, status: 0, data: null, rawText: '' };
+  let rawText = '';
+  try {
+    rawText = await res.text();
+  } catch (err) {
+    return { ok: res.ok || false, status: res.status || 0, data: null, rawText: '' };
+  }
+  try {
+    const data = JSON.parse(rawText);
+    return { ok: res.ok, status: res.status, data, rawText };
+  } catch (err) {
+    return { ok: false, status: res.status, data: null, rawText };
+  }
 }
 
 // ==========================================================================
@@ -896,11 +914,9 @@ export function verifyClientCaptcha(token, answer) {
 export async function fetchCaptcha() {
   try {
     const res = await apiFetch('/api/auth/captcha', { cache: 'no-store' });
-    if (res.ok) {
-      const data = await res.json();
-      if (data && (data.rawSvg || data.svg) && data.token) {
-        return data;
-      }
+    const parsed = await safeParseJsonResponse(res);
+    if (parsed.ok && parsed.data && (parsed.data.rawSvg || parsed.data.svg) && parsed.data.token) {
+      return parsed.data;
     }
   } catch (e) {
     console.warn('[Auth] Server CAPTCHA endpoint unreachable, using client security engine:', e);
@@ -925,22 +941,25 @@ export async function registerUser({ name, businessName, email, password, captch
         body: JSON.stringify({ name, businessName, email, password, captchaToken, captchaAnswer })
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || 'Registration failed');
+      const parsed = await safeParseJsonResponse(res);
+      if (parsed.ok && parsed.data && parsed.data.token && parsed.data.user) {
+        localStorage.setItem(AUTH_TOKEN_KEY, parsed.data.token);
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(parsed.data.user));
+        await syncFromServer();
+        notifyAuthListeners();
+        return parsed.data;
       }
 
-      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-      await syncFromServer();
-      notifyAuthListeners();
-      return data;
+      // If server returned a known validation/duplicate error (409 conflict, 400 bad request)
+      if (parsed.data && parsed.data.message && parsed.status < 500) {
+        throw new Error(parsed.data.message);
+      }
     } catch (err) {
       // If server responded with a known validation/duplicate error, rethrow it
-      if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network')) {
+      if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network') && !err.message.includes('JSON') && !err.message.includes('server')) {
         throw err;
       }
-      console.warn('[Auth] Server registration unreachable, creating isolated local account:', err);
+      console.warn('[Auth] Server registration unreachable or returned 500, creating isolated local account:', err);
     }
   }
 
@@ -950,7 +969,7 @@ export async function registerUser({ name, businessName, email, password, captch
     id: userId,
     _id: userId,
     email: email.toLowerCase().trim(),
-    name: name.trim(),
+    name: name.trim() || email.split('@')[0],
     businessName: businessName.trim() || 'Transport Logistics',
     provider: 'local',
     avatar: '',
@@ -989,18 +1008,20 @@ export async function loginUser(email, password) {
         body: JSON.stringify({ email, password })
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || 'Invalid Email ID or Password');
+      const parsed = await safeParseJsonResponse(res);
+      if (parsed.ok && parsed.data && parsed.data.token && parsed.data.user) {
+        localStorage.setItem(AUTH_TOKEN_KEY, parsed.data.token);
+        localStorage.setItem(AUTH_USER_KEY, JSON.stringify(parsed.data.user));
+        await syncFromServer();
+        notifyAuthListeners();
+        return parsed.data;
       }
 
-      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-      await syncFromServer();
-      notifyAuthListeners();
-      return data;
+      if (parsed.data && parsed.data.message && parsed.status < 500) {
+        throw new Error(parsed.data.message);
+      }
     } catch (err) {
-      if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network')) {
+      if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network') && !err.message.includes('JSON') && !err.message.includes('server')) {
         throw err;
       }
       console.warn('[Auth] Server login unreachable, checking local credentials:', err);
@@ -1037,21 +1058,98 @@ export async function loginWithGoogle(googleProfileOrCredential) {
     bodyPayload = googleProfileOrCredential || {};
   }
 
-  const res = await apiFetch('/api/auth/google', {
-    method: 'POST',
-    body: JSON.stringify(bodyPayload)
-  });
+  // 1. Try server-side Google authentication endpoint
+  try {
+    const res = await apiFetch('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(bodyPayload)
+    });
 
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.message || 'Google sign-in failed');
+    const parsed = await safeParseJsonResponse(res);
+    if (parsed.ok && parsed.data && parsed.data.token && parsed.data.user) {
+      localStorage.setItem(AUTH_TOKEN_KEY, parsed.data.token);
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(parsed.data.user));
+      await syncFromServer();
+      notifyAuthListeners();
+      return parsed.data;
+    }
+
+    if (parsed.data && parsed.data.message && parsed.status < 500) {
+      throw new Error(parsed.data.message);
+    }
+  } catch (err) {
+    // If explicit client validation error, rethrow
+    if (err.message && !err.message.includes('fetch') && !err.message.includes('Failed') && !err.message.includes('network') && !err.message.includes('JSON') && !err.message.includes('server')) {
+      throw err;
+    }
+    console.warn('[Auth] Server Google login unreachable or 500 error, activating local account engine:', err);
   }
 
-  localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
-  await syncFromServer();
+  // 2. Resilient Offline / Serverless Fallback
+  // If the serverless endpoint is sleeping, read-only, or has no Mongo connection,
+  // we immediately log the user in locally so they are never blocked!
+  let email = (bodyPayload.email || '').toLowerCase().trim();
+  let name = (bodyPayload.name || '').trim();
+  let avatar = bodyPayload.avatar || '';
+
+  // If JWT credential was supplied, decode payload client-side as well
+  if (bodyPayload.credential && typeof bodyPayload.credential === 'string') {
+    try {
+      const parts = bodyPayload.credential.split('.');
+      if (parts.length >= 2) {
+        const payloadJson = decodeURIComponent(escape(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))));
+        const googlePayload = JSON.parse(payloadJson);
+        if (googlePayload.email) email = googlePayload.email;
+        if (googlePayload.name) name = googlePayload.name;
+        if (googlePayload.picture) avatar = googlePayload.picture;
+      }
+    } catch (e) {
+      console.warn('Failed to parse Google JWT credential on client:', e);
+    }
+  }
+
+  if (!email) {
+    email = 'transporter@gmail.com';
+  }
+  if (!name) {
+    name = email.split('@')[0];
+  }
+  if (!avatar) {
+    avatar = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`;
+  }
+
+  const userId = 'usr_goog_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 6);
+  const localUser = {
+    id: userId,
+    _id: userId,
+    email,
+    name,
+    businessName: bodyPayload.businessName || `${name} Logistics`,
+    avatar,
+    provider: 'google',
+    emailVerified: true,
+    createdAt: new Date().toISOString()
+  };
+
+  const localToken = 'local_goog_' + btoa(unescape(encodeURIComponent(JSON.stringify(localUser))));
+  localStorage.setItem(AUTH_TOKEN_KEY, localToken);
+  localStorage.setItem(AUTH_USER_KEY, JSON.stringify(localUser));
+
+  // Also register in local user list for continuity
+  try {
+    const usersRaw = localStorage.getItem('transport_ledger_local_users');
+    const localUsers = usersRaw ? JSON.parse(usersRaw) : [];
+    const idx = localUsers.findIndex(u => u.email.toLowerCase() === email);
+    if (idx !== -1) {
+      localUsers[idx] = { ...localUsers[idx], ...localUser };
+    } else {
+      localUsers.push(localUser);
+    }
+    localStorage.setItem('transport_ledger_local_users', JSON.stringify(localUsers));
+  } catch (e) {}
+
   notifyAuthListeners();
-  return data;
+  return { success: true, user: localUser, token: localToken };
 }
 
 export async function logoutUser() {
@@ -1064,7 +1162,8 @@ export async function fetchAnalytics() {
   if (isServerOnline) {
     try {
       const res = await apiFetch('/api/analytics');
-      if (res.ok) return await res.json();
+      const parsed = await safeParseJsonResponse(res);
+      if (parsed.ok) return parsed.data;
     } catch (e) {
       console.warn('Analytics fetch failed:', e);
     }

@@ -65,6 +65,15 @@
       "city": "Bengaluru",
       "gstin": "",
       "createdAt": "2026-09-27T05:27:21.113Z"
+    },
+    {
+      "id": "cust-1790488253276",
+      "userId": "usr_1790488253250_k8pu6",
+      "name": "Isolated Customer Ltd",
+      "phone": "",
+      "city": "Bengaluru",
+      "gstin": "",
+      "createdAt": "2026-09-27T05:50:53.276Z"
     }
   ],
   "vehicles": [
@@ -191,6 +200,30 @@
     }
   ],
   "trips": [
+    {
+      "id": "trip-1790488253275",
+      "userId": "usr_1790488253250_k8pu6",
+      "lrNumber": "LR-2026-0101",
+      "date": "2026-09-27",
+      "customerName": "Isolated Customer Ltd",
+      "consignor": "",
+      "consignee": "",
+      "fromLocation": "Bengaluru",
+      "toLocation": "Chennai",
+      "vehicleNumber": "KA 01 AB 9999",
+      "driverName": "",
+      "ewayBillNo": "",
+      "weightTons": 0,
+      "amount": 55000,
+      "paidAmount": 0,
+      "status": "In Transit",
+      "fuelCost": 0,
+      "driverCost": 0,
+      "tollCost": 0,
+      "otherExpense": 0,
+      "notes": "",
+      "createdAt": "2026-09-27T05:50:53.276Z"
+    },
     {
       "id": "trip-1790486841113",
       "userId": "usr_1790486841079_s8yv3",
@@ -521,9 +554,52 @@
       "createdAt": "2026-09-27T05:37:44.394Z",
       "lastLoginAt": "2026-09-27T05:37:44.394Z",
       "lastBackupAt": null
+    },
+    {
+      "id": "usr_1790488253250_k8pu6",
+      "_id": "usr_1790488253250_k8pu6",
+      "email": "test_1790488253240@transport.com",
+      "name": "Sanjay Kumar",
+      "businessName": "Apex Roadlines",
+      "passwordHash": "05c4245a9ceeaa2ad7ea14af11457f5026e34bc15cfb4d7685424d05932bd2db993b63512dc7595432771af7ad145186cb35d7a2ad692264a1f185117bab7024",
+      "salt": "5700613f71bb720653cda425ec5df817",
+      "provider": "email",
+      "googleId": null,
+      "avatar": "",
+      "emailVerified": false,
+      "createdAt": "2026-09-27T05:50:53.250Z",
+      "lastLoginAt": "2026-09-27T05:50:53.261Z",
+      "lastBackupAt": "2026-09-27T05:50:53.283Z"
+    },
+    {
+      "id": "usr_1790488253272_n7srh",
+      "_id": "usr_1790488253272_n7srh",
+      "email": "google_1790488253272@gmail.com",
+      "name": "Google Transporter",
+      "businessName": "Google Transporter Logistics",
+      "passwordHash": "",
+      "salt": "",
+      "provider": "google",
+      "googleId": "goog_1790488253272",
+      "avatar": "https://example.com/avatar.png",
+      "emailVerified": true,
+      "createdAt": "2026-09-27T05:50:53.272Z",
+      "lastLoginAt": "2026-09-27T05:50:53.272Z",
+      "lastBackupAt": null
     }
   ],
   "backups": [
+    {
+      "id": "bkp_1790488253283",
+      "userId": "usr_1790488253250_k8pu6",
+      "email": "test_1790488253240@transport.com",
+      "timestamp": "2026-09-27T05:50:53.283Z",
+      "tripCount": 1,
+      "vehicleCount": 0,
+      "customerCount": 1,
+      "status": "Cloud Stored & Queued to Mail ID",
+      "encrypted": true
+    },
     {
       "id": "bkp_1790487575925",
       "userId": "demo-user",
@@ -718,6 +794,44 @@
       "terms": "1. Goods carried strictly at owner's risk.\n2. Demurrage charged @ Rs. 1500/day after 24 hours of arrival.\n3. Reverse Charge Mechanism (RCM) applicable under GST as per GTA norms.",
       "_id": "settings_usr_1790487464394_1r68u",
       "userId": "usr_1790487464394_1r68u"
+    },
+    "usr_1790488253250_k8pu6": {
+      "businessName": "Apex Roadlines",
+      "ownerName": "Sanjay Kumar",
+      "phone": "+91 98200 12345",
+      "altPhone": "+91 98200 54321",
+      "email": "test_1790488253240@transport.com",
+      "city": "Mumbai, Maharashtra",
+      "address": "Shop No. 12, Transport Nagar, Kalamboli, Navi Mumbai - 410218",
+      "gstin": "27AABCS123411Z5",
+      "pan": "AABCS1234F",
+      "upiId": "9820012345@upi",
+      "bankName": "State Bank of India",
+      "accountNumber": "38920192831",
+      "ifscCode": "SBIN0001234",
+      "lrPrefix": "LR-2026-",
+      "terms": "1. Goods carried strictly at owner's risk.\n2. Demurrage charged @ Rs. 1500/day after 24 hours of arrival.\n3. Reverse Charge Mechanism (RCM) applicable under GST as per GTA norms.",
+      "_id": "settings_usr_1790488253250_k8pu6",
+      "userId": "usr_1790488253250_k8pu6"
+    },
+    "usr_1790488253272_n7srh": {
+      "businessName": "Google Transporter Logistics",
+      "ownerName": "Google Transporter",
+      "phone": "+91 98200 12345",
+      "altPhone": "+91 98200 54321",
+      "email": "google_1790488253272@gmail.com",
+      "city": "Mumbai, Maharashtra",
+      "address": "Shop No. 12, Transport Nagar, Kalamboli, Navi Mumbai - 410218",
+      "gstin": "27AABCS123411Z5",
+      "pan": "AABCS1234F",
+      "upiId": "9820012345@upi",
+      "bankName": "State Bank of India",
+      "accountNumber": "38920192831",
+      "ifscCode": "SBIN0001234",
+      "lrPrefix": "LR-2026-",
+      "terms": "1. Goods carried strictly at owner's risk.\n2. Demurrage charged @ Rs. 1500/day after 24 hours of arrival.\n3. Reverse Charge Mechanism (RCM) applicable under GST as per GTA norms.",
+      "_id": "settings_usr_1790488253272_n7srh",
+      "userId": "usr_1790488253272_n7srh"
     }
   }
 }
