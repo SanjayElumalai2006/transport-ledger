@@ -39,6 +39,10 @@ import {
   registerUser,
   loginUser,
   logoutUser,
+  loginWithGoogle,
+  generateClientCaptcha,
+  verifyClientCaptcha,
+  fetchCaptcha,
   sendBackupToEmail,
   getBackupHistory
 } from './storage.js';
@@ -2895,11 +2899,123 @@ function escapeHtml(str) {
 }
 
 /* ==========================================================================
-   9. AUTHENTICATION & ENROLLMENT MODAL
+   9. AUTHENTICATION & ENROLLMENT MODAL (GOOGLE LOGIN & ANTI-BOT CAPTCHA)
    ========================================================================== */
+
+function openGoogleAuthModal() {
+  const modalBackdrop = document.getElementById('modal-backdrop');
+  if (!modalBackdrop) return;
+
+  const modalHtml = `
+    <div class="modal-card" style="max-width: 440px;">
+      <div class="modal-header">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <svg width="24" height="24" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+          </svg>
+          <h3 style="margin: 0; font-size: 1.2rem; font-weight: 800;">Sign in with Google</h3>
+        </div>
+        <button class="btn-close-modal" onclick="window.closeModal()">
+          <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+
+      <div class="modal-body" style="padding-top: 10px;">
+        <p style="font-size: 0.85rem; color: var(--slate-600); margin: 0 0 16px;">
+          Choose an account to continue to <strong>Transport Ledger Cloud</strong>:
+        </p>
+
+        <!-- Quick 1-Click Google Accounts -->
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;">
+          <div class="google-acc-pill" id="btn-modal-goog-acc-sanjay">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="width: 36px; height: 36px; border-radius: 50%; background: #4285F4; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem;">
+                SE
+              </div>
+              <div style="text-align: left;">
+                <div style="font-weight: 700; font-size: 0.9rem; color: var(--slate-900);">Sanjay Elumalai</div>
+                <div style="font-size: 0.78rem; color: var(--slate-500);">es3300735@gmail.com</div>
+              </div>
+            </div>
+            <span style="font-size: 0.75rem; background: #ecfdf5; color: #047857; font-weight: 700; padding: 2px 8px; border-radius: 999px;">Cloud Ready</span>
+          </div>
+
+          <div class="google-acc-pill" id="btn-modal-goog-acc-demo">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="width: 36px; height: 36px; border-radius: 50%; background: #059669; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem;">
+                TL
+              </div>
+              <div style="text-align: left;">
+                <div style="font-weight: 700; font-size: 0.9rem; color: var(--slate-900);">Demo Transporter</div>
+                <div style="font-size: 0.78rem; color: var(--slate-500);">demo.transporter@gmail.com</div>
+              </div>
+            </div>
+            <span style="font-size: 0.75rem; background: #f1f5f9; color: var(--slate-600); font-weight: 600; padding: 2px 8px; border-radius: 999px;">Demo</span>
+          </div>
+        </div>
+
+        <div class="auth-divider"><span>or enter custom gmail</span></div>
+
+        <form id="form-modal-google-custom">
+          <div class="form-group" style="margin-bottom: 14px;">
+            <label class="form-label" style="font-size: 0.82rem;">Your Google Email ID</label>
+            <input type="email" id="input-modal-google-email" class="form-input" placeholder="transport@gmail.com" required />
+          </div>
+          <button type="submit" class="btn btn-google" style="padding: 10px; font-weight: 700;">
+            Sign in with this Google Account
+          </button>
+        </form>
+      </div>
+    </div>
+  `;
+
+  modalBackdrop.innerHTML = modalHtml;
+  modalBackdrop.classList.add('open');
+
+  const doGoogleLogin = async (email, name) => {
+    try {
+      showToast('Authenticating with Google...', 'info');
+      await loginWithGoogle({
+        email,
+        name,
+        businessName: `${name} Logistics`,
+        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`
+      });
+      window.closeModal();
+      showToast(`Welcome back, ${name}! Signed in with Google.`, 'success');
+      switchTab('dashboard');
+    } catch (err) {
+      showToast(err.message || 'Google sign-in failed', 'error');
+    }
+  };
+
+  document.getElementById('btn-modal-goog-acc-sanjay')?.addEventListener('click', () => {
+    doGoogleLogin('es3300735@gmail.com', 'Sanjay Elumalai');
+  });
+
+  document.getElementById('btn-modal-goog-acc-demo')?.addEventListener('click', () => {
+    doGoogleLogin('demo.transporter@gmail.com', 'Demo Transporter');
+  });
+
+  document.getElementById('form-modal-google-custom')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const email = document.getElementById('input-modal-google-email').value.trim();
+    if (!email.includes('@')) {
+      showToast('Please enter a valid Google email', 'error');
+      return;
+    }
+    const name = email.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    doGoogleLogin(email, name);
+  });
+}
+window.openGoogleAuthModal = openGoogleAuthModal;
 
 async function openAuthModal(initialTab = 'login') {
   let activeTab = initialTab;
+  let currentCaptcha = generateClientCaptcha();
 
   function renderAuthModalContent() {
     const modalBackdrop = document.getElementById('modal-backdrop');
@@ -2923,7 +3039,7 @@ async function openAuthModal(initialTab = 'login') {
 
         <div class="modal-body" style="padding-top: 14px;">
           <!-- Tab Navigation -->
-          <div class="auth-tabs" style="margin-bottom: 20px;">
+          <div class="auth-tabs" style="margin-bottom: 16px;">
             <button type="button" class="auth-tab ${activeTab === 'login' ? 'active' : ''}" id="tab-btn-login">
               Email ID Sign In
             </button>
@@ -2932,12 +3048,31 @@ async function openAuthModal(initialTab = 'login') {
             </button>
           </div>
 
+          <!-- Quick Google & 1-Click Access -->
+          <div style="margin-bottom: 16px;">
+            <button type="button" class="btn-google" id="btn-modal-google-auth" style="margin-bottom: 10px;">
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span>Continue with Google</span>
+            </button>
+
+            <button type="button" id="btn-modal-quick-demo" class="btn btn-outline btn-sm btn-block" style="justify-content: center; gap: 6px; font-weight: 700; color: #047857; border-color: #a7f3d0; background: #ecfdf5;">
+              ⚡ 1-Click Access: Sanjay Logistics (Cloud)
+            </button>
+
+            <div class="auth-divider"><span>or with email credentials</span></div>
+          </div>
+
           <!-- SIGN IN FORM -->
           ${activeTab === 'login' ? `
             <form id="form-auth-login">
               <div class="form-group" style="margin-bottom: 14px;">
                 <label class="form-label">Email ID Address</label>
-                <input type="email" id="auth-login-email" class="form-input" placeholder="e.g. transport@gmail.com" required autocomplete="email" />
+                <input type="email" id="auth-login-email" class="form-input" placeholder="transport@gmail.com" required autocomplete="email" />
               </div>
 
               <div class="form-group" style="margin-bottom: 18px;">
@@ -2948,7 +3083,7 @@ async function openAuthModal(initialTab = 'login') {
                 <input type="password" id="auth-login-password" class="form-input" style="margin-top:6px;" placeholder="••••••••" required autocomplete="current-password" />
               </div>
 
-              <button type="submit" id="btn-submit-login" class="btn btn-primary btn-block" style="padding: 12px;">
+              <button type="submit" id="btn-submit-login" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
                 Sign In to Transport Ledger
               </button>
 
@@ -2957,33 +3092,58 @@ async function openAuthModal(initialTab = 'login') {
               </div>
             </form>
           ` : `
-            <!-- REGISTRATION FORM -->
+            <!-- REGISTRATION FORM WITH ANTI-BOT CAPTCHA -->
             <form id="form-auth-register">
-              <div class="form-group" style="margin-bottom: 14px;">
+              <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Transport Business Name</label>
                 <input type="text" id="reg-biz-name" class="form-input" placeholder="e.g. Jai Hanuman Transport Co." required />
               </div>
 
-              <div class="form-group" style="margin-bottom: 14px;">
+              <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Owner / Operator Name</label>
                 <input type="text" id="reg-name" class="form-input" placeholder="e.g. Ramesh Sharma" required />
               </div>
 
-              <div class="form-group" style="margin-bottom: 14px;">
+              <div class="form-group" style="margin-bottom: 12px;">
                 <label class="form-label">Email ID Address</label>
                 <input type="email" id="reg-email" class="form-input" placeholder="e.g. ramesh@transport.com" required autocomplete="email" />
               </div>
 
-              <div class="form-group" style="margin-bottom: 18px;">
+              <div class="form-group" style="margin-bottom: 14px;">
                 <label class="form-label">Create Password (min. 6 characters)</label>
                 <input type="password" id="reg-password" class="form-input" placeholder="••••••••" minlength="6" required autocomplete="new-password" />
+              </div>
+
+              <!-- ANTI-BOT SECURITY CAPTCHA -->
+              <div class="form-group" style="margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <label class="form-label" style="margin: 0; font-size: 0.82rem; font-weight: 700; color: var(--slate-800);">
+                    🛡️ Anti-Bot Security Verification
+                  </label>
+                  <button type="button" class="btn-refresh-captcha" id="btn-modal-refresh-captcha" title="Click to refresh code">
+                    <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                    Refresh
+                  </button>
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 10px; background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: var(--radius-md); padding: 8px 12px;">
+                  <div id="modal-captcha-image-wrapper" style="min-width: 160px; height: 48px; display: flex; align-items: center; justify-content: center; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #cbd5e1;">
+                    ${currentCaptcha.rawSvg || (currentCaptcha.svg ? `<img src="${currentCaptcha.svg}" alt="Code" style="height:48px;" />` : '')}
+                  </div>
+                  <div style="flex: 1;">
+                    <input type="text" id="modal-reg-captcha-input" class="form-input" placeholder="Code" maxlength="5" style="text-transform: uppercase; letter-spacing: 3px; font-weight: 800; text-align: center; font-size: 1.1rem; padding: 10px 8px; height: 48px;" required autocomplete="off" />
+                  </div>
+                </div>
+                <div id="modal-captcha-hint" style="font-size: 0.75rem; color: var(--slate-500); margin-top: 4px;">
+                  Enter the 5 characters shown above (case-insensitive)
+                </div>
               </div>
 
               <button type="submit" id="btn-submit-register" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700; font-size: 1rem;">
                 Enroll &amp; Create Safe Ledger
               </button>
 
-              <div style="text-align: center; margin-top: 16px; font-size: 0.85rem; color: var(--slate-600);">
+              <div style="text-align: center; margin-top: 14px; font-size: 0.85rem; color: var(--slate-600);">
                 Already have an account? <a href="#" id="link-goto-login" style="color: var(--primary-700); font-weight: 700; text-decoration: none;">Sign In</a>
               </div>
             </form>
@@ -2994,6 +3154,28 @@ async function openAuthModal(initialTab = 'login') {
 
     modalBackdrop.innerHTML = modalHtml;
     modalBackdrop.classList.add('open');
+
+    // Google Login button
+    document.getElementById('btn-modal-google-auth')?.addEventListener('click', () => {
+      openGoogleAuthModal();
+    });
+
+    // Quick demo 1-click test button
+    document.getElementById('btn-modal-quick-demo')?.addEventListener('click', async () => {
+      try {
+        showToast('Entering cloud ledger as Sanjay...', 'info');
+        await loginWithGoogle({
+          email: 'es3300735@gmail.com',
+          name: 'Sanjay Elumalai',
+          businessName: 'Sanjay Transport Logistics'
+        });
+        window.closeModal();
+        showToast('Signed in successfully! Welcome Sanjay.', 'success');
+        switchTab('dashboard');
+      } catch (e) {
+        showToast(e.message || 'Quick login failed', 'error');
+      }
+    });
 
     // Tab buttons
     document.getElementById('tab-btn-login')?.addEventListener('click', () => {
@@ -3016,6 +3198,45 @@ async function openAuthModal(initialTab = 'login') {
       activeTab = 'login';
       renderAuthModalContent();
     });
+
+    // Refresh Captcha in modal
+    document.getElementById('btn-modal-refresh-captcha')?.addEventListener('click', async () => {
+      currentCaptcha = generateClientCaptcha();
+      const wrapper = document.getElementById('modal-captcha-image-wrapper');
+      if (wrapper) wrapper.innerHTML = currentCaptcha.rawSvg || `<img src="${currentCaptcha.svg}" alt="Code" style="height:48px;" />`;
+      const input = document.getElementById('modal-reg-captcha-input');
+      if (input) {
+        input.value = '';
+        input.style.borderColor = '';
+      }
+      const hint = document.getElementById('modal-captcha-hint');
+      if (hint) hint.innerHTML = 'Enter the 5 characters shown above (case-insensitive)';
+
+      try {
+        const srv = await fetchCaptcha();
+        if (srv && (srv.rawSvg || srv.svg)) {
+          currentCaptcha = srv;
+          if (wrapper) wrapper.innerHTML = srv.rawSvg || `<img src="${srv.svg}" alt="Code" style="height:48px;" />`;
+        }
+      } catch (err) {}
+    });
+
+    // Captcha live typing feedback in modal
+    const captchaInput = document.getElementById('modal-reg-captcha-input');
+    if (captchaInput) {
+      captchaInput.addEventListener('input', (e) => {
+        const val = e.target.value.trim().toUpperCase();
+        const hint = document.getElementById('modal-captcha-hint');
+        if (val.length === 5) {
+          if (currentCaptcha.code && val === currentCaptcha.code.toUpperCase()) {
+            captchaInput.style.borderColor = '#059669';
+            if (hint) hint.innerHTML = '<span style="color:#059669; font-weight:700;">✓ Security code verified</span>';
+          } else {
+            captchaInput.style.borderColor = '#e2e8f0';
+          }
+        }
+      });
+    }
 
     // Toggle password visibility
     const togglePwdBtn = document.getElementById('toggle-login-pwd');
@@ -3059,6 +3280,12 @@ async function openAuthModal(initialTab = 'login') {
       const name = document.getElementById('reg-name').value.trim();
       const email = document.getElementById('reg-email').value.trim();
       const password = document.getElementById('reg-password').value;
+      const captchaAnswer = document.getElementById('modal-reg-captcha-input')?.value.trim();
+
+      if (!captchaAnswer || captchaAnswer.length < 4) {
+        showToast('Please enter the 5-character Anti-Bot security code', 'error');
+        return;
+      }
 
       const submitBtn = document.getElementById('btn-submit-register');
       submitBtn.disabled = true;
@@ -3069,7 +3296,9 @@ async function openAuthModal(initialTab = 'login') {
           businessName,
           name,
           email,
-          password
+          password,
+          captchaToken: currentCaptcha.token,
+          captchaAnswer
         });
         window.closeModal();
         showToast(`Account successfully enrolled! Welcome ${name}`, 'success');
@@ -3077,6 +3306,8 @@ async function openAuthModal(initialTab = 'login') {
         showToast(err.message || 'Registration failed', 'error');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Enroll & Create Safe Ledger';
+        // Refresh captcha on failure
+        document.getElementById('btn-modal-refresh-captcha')?.click();
       }
     });
   }
@@ -3181,6 +3412,8 @@ window.openProfileModal = openProfileModal;
    10. DEDICATED LOGIN / CLOUD ACCOUNT VIEW
    ========================================================================== */
 
+let currentViewCaptcha = null;
+
 function renderLoginView() {
   const user = getCurrentUser();
   const s = state.settings;
@@ -3240,10 +3473,13 @@ function renderLoginView() {
     `;
   }
 
+  // Generate initial client captcha synchronously so view renders immediately
+  currentViewCaptcha = generateClientCaptcha();
+
   return `
     <div class="login-view-wrapper">
       <div class="login-view-card">
-        <div style="text-align: center; margin-bottom: 22px;">
+        <div style="text-align: center; margin-bottom: 20px;">
           <div style="width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 1.3rem; margin-bottom: 10px; box-shadow: 0 4px 10px rgba(5, 150, 105, 0.25);">
             🚚
           </div>
@@ -3254,13 +3490,32 @@ function renderLoginView() {
         </div>
 
         <!-- Tab Switcher -->
-        <div class="auth-tabs" style="margin-bottom: 18px;">
+        <div class="auth-tabs" style="margin-bottom: 16px;">
           <button type="button" class="auth-tab active" id="tab-login-view-signin">
             Email ID Sign In
           </button>
           <button type="button" class="auth-tab" id="tab-login-view-signup">
             New User Enroll
           </button>
+        </div>
+
+        <!-- Google Login & 1-Click Fast Track -->
+        <div style="margin-bottom: 16px;">
+          <button type="button" class="btn-google" id="btn-view-google-login" style="margin-bottom: 10px;">
+            <svg width="18" height="18" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+            </svg>
+            <span>Continue with Google</span>
+          </button>
+
+          <button type="button" id="btn-view-quick-demo" class="btn btn-outline btn-sm btn-block" style="justify-content: center; gap: 6px; font-weight: 700; color: #047857; border-color: #a7f3d0; background: #ecfdf5;">
+            ⚡ 1-Click Access: Sanjay Logistics (Cloud)
+          </button>
+
+          <div class="auth-divider"><span>or with email credentials</span></div>
         </div>
 
         <!-- Dynamic Feedback Alert -->
@@ -3292,7 +3547,7 @@ function renderLoginView() {
           </form>
         </div>
 
-        <!-- 2. REGISTRATION SECTION -->
+        <!-- 2. REGISTRATION SECTION WITH ANTI-BOT CAPTCHA -->
         <div id="section-view-signup" style="display: none;">
           <form id="form-view-register">
             <div class="form-group" style="margin-bottom: 12px;">
@@ -3310,9 +3565,34 @@ function renderLoginView() {
               <input type="email" id="view-reg-email" class="form-input" placeholder="ramesh@transport.com" required autocomplete="email" />
             </div>
 
-            <div class="form-group" style="margin-bottom: 18px;">
+            <div class="form-group" style="margin-bottom: 14px;">
               <label class="form-label">Create Password (min. 6 characters)</label>
               <input type="password" id="view-reg-pwd" class="form-input" placeholder="••••••••" minlength="6" required autocomplete="new-password" />
+            </div>
+
+            <!-- ANTI-BOT SECURITY CAPTCHA -->
+            <div class="form-group" style="margin-bottom: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label class="form-label" style="margin: 0; font-size: 0.82rem; font-weight: 700; color: var(--slate-800);">
+                  🛡️ Anti-Bot Security Verification
+                </label>
+                <button type="button" class="btn-refresh-captcha" id="btn-view-refresh-captcha" title="Click to refresh code">
+                  <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  Refresh
+                </button>
+              </div>
+              
+              <div style="display: flex; align-items: center; gap: 10px; background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: var(--radius-md); padding: 8px 12px;">
+                <div id="view-captcha-image-wrapper" style="min-width: 160px; height: 48px; display: flex; align-items: center; justify-content: center; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #cbd5e1;">
+                  ${currentViewCaptcha.rawSvg || (currentViewCaptcha.svg ? `<img src="${currentViewCaptcha.svg}" alt="Code" style="height:48px;" />` : '')}
+                </div>
+                <div style="flex: 1;">
+                  <input type="text" id="view-reg-captcha-input" class="form-input" placeholder="Code" maxlength="5" style="text-transform: uppercase; letter-spacing: 3px; font-weight: 800; text-align: center; font-size: 1.1rem; padding: 10px 8px; height: 48px;" required autocomplete="off" />
+                </div>
+              </div>
+              <div id="view-captcha-hint" style="font-size: 0.75rem; color: var(--slate-500); margin-top: 4px;">
+                Enter the 5 characters shown above (case-insensitive)
+              </div>
             </div>
 
             <button type="submit" id="btn-submit-view-register" class="btn btn-primary btn-block" style="padding: 12px; font-weight: 700;">
@@ -3344,7 +3624,7 @@ function attachLoginEvents() {
       btn.textContent = 'Securing & Sending...';
       try {
         await sendBackupToEmail(user.email);
-        showToast(`Backup sent to ${user.email}`, 'success');
+        showToast(`Full backup snapshot sent to ${user.email}`, 'success');
       } catch (err) {
         showToast(err.message || 'Failed to dispatch backup', 'error');
       } finally {
@@ -3362,7 +3642,27 @@ function attachLoginEvents() {
     return;
   }
 
-  // Not logged in - Tab switching
+  // Not logged in - Google Login & 1-Click Demo
+  document.getElementById('btn-view-google-login')?.addEventListener('click', () => {
+    openGoogleAuthModal();
+  });
+
+  document.getElementById('btn-view-quick-demo')?.addEventListener('click', async () => {
+    try {
+      showToast('Entering cloud ledger as Sanjay...', 'info');
+      await loginWithGoogle({
+        email: 'es3300735@gmail.com',
+        name: 'Sanjay Elumalai',
+        businessName: 'Sanjay Transport Logistics'
+      });
+      showToast('Signed in successfully! Welcome Sanjay.', 'success');
+      switchTab('dashboard');
+    } catch (e) {
+      showToast(e.message || 'Quick login failed', 'error');
+    }
+  });
+
+  // Tab switching
   const tabSignin = document.getElementById('tab-login-view-signin');
   const tabSignup = document.getElementById('tab-login-view-signup');
   const secSignin = document.getElementById('section-view-signin');
@@ -3394,6 +3694,45 @@ function attachLoginEvents() {
     e.preventDefault();
     setTab('signin');
   });
+
+  // Refresh CAPTCHA button
+  document.getElementById('btn-view-refresh-captcha')?.addEventListener('click', async () => {
+    currentViewCaptcha = generateClientCaptcha();
+    const wrapper = document.getElementById('view-captcha-image-wrapper');
+    if (wrapper) wrapper.innerHTML = currentViewCaptcha.rawSvg || `<img src="${currentViewCaptcha.svg}" alt="Code" style="height:48px;" />`;
+    const input = document.getElementById('view-reg-captcha-input');
+    if (input) {
+      input.value = '';
+      input.style.borderColor = '';
+    }
+    const hint = document.getElementById('view-captcha-hint');
+    if (hint) hint.innerHTML = 'Enter the 5 characters shown above (case-insensitive)';
+
+    try {
+      const srv = await fetchCaptcha();
+      if (srv && (srv.rawSvg || srv.svg)) {
+        currentViewCaptcha = srv;
+        if (wrapper) wrapper.innerHTML = srv.rawSvg || `<img src="${srv.svg}" alt="Code" style="height:48px;" />`;
+      }
+    } catch (err) {}
+  });
+
+  // Captcha typing live assistance
+  const viewCaptchaInput = document.getElementById('view-reg-captcha-input');
+  if (viewCaptchaInput) {
+    viewCaptchaInput.addEventListener('input', (e) => {
+      const val = e.target.value.trim().toUpperCase();
+      const hint = document.getElementById('view-captcha-hint');
+      if (val.length === 5) {
+        if (currentViewCaptcha.code && val === currentViewCaptcha.code.toUpperCase()) {
+          viewCaptchaInput.style.borderColor = '#059669';
+          if (hint) hint.innerHTML = '<span style="color:#059669; font-weight:700;">✓ Security code verified</span>';
+        } else {
+          viewCaptchaInput.style.borderColor = '#e2e8f0';
+        }
+      }
+    });
+  }
 
   // Password visibility toggle
   const toggleBtn = document.getElementById('btn-toggle-view-pwd');
@@ -3437,15 +3776,26 @@ function attachLoginEvents() {
     }
   });
 
-  // Register Form Submit (Direct & Reliable)
+  // Register Form Submit with CAPTCHA validation
   document.getElementById('form-view-register')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const businessName = document.getElementById('view-reg-biz').value.trim();
     const name = document.getElementById('view-reg-name').value.trim();
     const email = document.getElementById('view-reg-email').value.trim();
     const password = document.getElementById('view-reg-pwd').value;
-    const submitBtn = document.getElementById('btn-submit-view-register');
+    const captchaAnswer = document.getElementById('view-reg-captcha-input')?.value.trim();
 
+    if (!captchaAnswer || captchaAnswer.length < 4) {
+      if (feedback) {
+        feedback.className = 'auth-form-feedback error';
+        feedback.textContent = 'Please enter the 5-character Anti-Bot security code';
+        feedback.style.display = 'block';
+      }
+      showToast('Please enter the 5-character Anti-Bot security code', 'error');
+      return;
+    }
+
+    const submitBtn = document.getElementById('btn-submit-view-register');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Enrolling Account...';
     if (feedback) { feedback.style.display = 'none'; feedback.className = 'auth-form-feedback'; }
@@ -3455,7 +3805,9 @@ function attachLoginEvents() {
         businessName,
         name,
         email,
-        password
+        password,
+        captchaToken: currentViewCaptcha.token,
+        captchaAnswer
       });
       showToast(`Account successfully enrolled! Welcome ${name}`, 'success');
       switchTab('dashboard');
@@ -3468,6 +3820,8 @@ function attachLoginEvents() {
         feedback.style.display = 'block';
       }
       showToast(err.message || 'Registration failed', 'error');
+      // Refresh captcha on failure
+      document.getElementById('btn-view-refresh-captcha')?.click();
     }
   });
 }
