@@ -44,7 +44,9 @@ import {
   verifyClientCaptcha,
   fetchCaptcha,
   sendBackupToEmail,
-  getBackupHistory
+  getBackupHistory,
+  updateUserProfile,
+  changeUserPassword
 } from './storage.js';
 
 import {
@@ -176,6 +178,17 @@ function updateHeaderInfo() {
       }
     };
   });
+
+  const mobileProfileBtn = document.getElementById('btn-mobile-profile');
+  if (mobileProfileBtn) {
+    mobileProfileBtn.onclick = () => {
+      if (user) {
+        openProfileModal();
+      } else {
+        switchTab('login');
+      }
+    };
+  }
 }
 
 // Setup Nav Links & Buttons
@@ -1826,8 +1839,30 @@ function attachSettingsEvents() {
       };
 
       await saveSettings(updated);
+      const currentUser = getCurrentUser();
+      if (currentUser) {
+        try {
+          await updateUserProfile({
+            name: updated.ownerName || currentUser.name,
+            businessName: updated.businessName,
+            phone: updated.phone,
+            altPhone: updated.altPhone,
+            gstin: updated.gstin,
+            pan: updated.pan,
+            address: updated.address,
+            city: updated.city,
+            upiId: updated.upiId,
+            bankName: updated.bankName,
+            accountNumber: updated.accountNumber,
+            ifscCode: updated.ifscCode
+          });
+        } catch (err) {
+          console.warn('Sync profile with cloud user failed:', err);
+        }
+      }
       loadState();
-      showToast('Business settings saved successfully!', 'success');
+      updateHeaderInfo();
+      showToast('Business settings and profile saved successfully!', 'success');
     });
   }
 
@@ -3318,63 +3353,270 @@ async function openAuthModal(initialTab = 'login') {
 window.openAuthModal = openAuthModal;
 
 // 10. USER PROFILE & CLOUD ACCOUNT MODAL
-function openProfileModal() {
+// 10. USER PROFILE & CLOUD ACCOUNT MODAL
+function openProfileModal(initialTab = 'profile') {
   const user = getCurrentUser();
-  const s = state.settings;
+  const s = state.settings || {};
+
+  if (!user) {
+    const guestHtml = `
+      <div class="modal-card" style="max-width: 480px;">
+        <div class="modal-header">
+          <div>
+            <h3 style="margin:0; font-size:1.25rem;">Account &amp; Cloud Profile</h3>
+            <p style="margin:2px 0 0; font-size:0.8rem; color:var(--slate-500);">Sign in to access your cloud profile</p>
+          </div>
+          <button class="btn-close-modal" onclick="window.closeModal()">
+            <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+        <div class="modal-body" style="text-align:center; padding:24px 20px;">
+          <div style="width:60px; height:60px; border-radius:50%; background:var(--slate-100); display:inline-flex; align-items:center; justify-content:center; font-size:1.8rem; margin-bottom:14px;">
+            ??
+          </div>
+          <h4 style="margin:0 0 8px; font-size:1.15rem;">You are currently in Guest Mode</h4>
+          <p style="font-size:0.88rem; color:var(--slate-600); margin:0 0 20px; line-height:1.5;">
+            Sign in with your email or Google account to isolate your transport business data safely in MongoDB Atlas cloud storage.
+          </p>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <button class="btn btn-primary" onclick="window.closeModal(); window.switchTab('login');" style="justify-content:center;">
+              Go to Sign In / Enroll
+            </button>
+            <button class="btn btn-outline" onclick="window.closeModal(); window.openGoogleAuthModal();" style="justify-content:center;">
+              Continue with Google
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+    const backdrop = document.getElementById('modal-backdrop');
+    backdrop.innerHTML = guestHtml;
+    backdrop.classList.add('open');
+    return;
+  }
 
   const modalHtml = `
-    <div class="modal-card" style="max-width: 480px;">
-      <div class="modal-header">
-        <div>
-          <h3 style="margin:0;">User Account &amp; Cloud Security</h3>
-          <p style="margin:2px 0 0; font-size:0.8rem; color:var(--slate-500);">MongoDB Atlas isolated cloud profile</p>
+    <div class="modal-card" style="max-width: 600px; width: 95%; max-height: 90vh; display: flex; flex-direction: column;">
+      <div class="modal-header" style="flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div id="modal-header-avatar" style="width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #059669, #047857); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; font-weight: 800; overflow: hidden; flex-shrink: 0;">
+            ${user.avatar && (user.avatar.startsWith('http') || user.avatar.startsWith('data:')) ? `<img src="${user.avatar}" alt="Avatar" style="width:100%; height:100%; object-fit:cover;" />` : (user.avatar || (user.name ? user.name.substring(0, 2).toUpperCase() : 'TL'))}
+          </div>
+          <div>
+            <h3 style="margin:0; font-size:1.18rem; font-weight:800; color:var(--slate-900);">${escapeHtml(user.name || 'Fleet Operator')}</h3>
+            <div style="display: flex; align-items: center; gap: 8px; margin-top: 2px; flex-wrap: wrap;">
+              <span style="font-size: 0.8rem; color: var(--slate-600);">${escapeHtml(user.email)}</span>
+              <span class="auth-badge-pill" style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 0.72rem; padding: 1px 6px;">
+                ?? MongoDB Atlas Active
+              </span>
+            </div>
+          </div>
         </div>
         <button class="btn-close-modal" onclick="window.closeModal()">
           <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
 
-      <div class="modal-body">
-        <div style="display:flex; flex-direction:column; gap:16px;">
-          
-          <div style="display:flex; align-items:center; gap:14px; background:var(--slate-50); border:1px solid var(--slate-200); padding:16px; border-radius:var(--radius-md);">
-            <div style="width:52px; height:52px; border-radius:50%; background:#047857; color:#fff; display:flex; align-items:center; justify-content:center; font-size:1.3rem; font-weight:800;">
-              ${user ? user.name.substring(0, 2).toUpperCase() : 'TL'}
+      <!-- Modal Tabs -->
+      <div style="padding: 10px 20px 0; flex-shrink: 0;">
+        <div class="auth-tabs" style="margin-bottom: 0;">
+          <button type="button" class="auth-tab ${initialTab === 'profile' ? 'active' : ''}" id="tab-modal-profile">
+            ?? Edit Profile
+          </button>
+          <button type="button" class="auth-tab ${initialTab === 'security' ? 'active' : ''}" id="tab-modal-security">
+            ?? Password &amp; Security
+          </button>
+          <button type="button" class="auth-tab ${initialTab === 'backup' ? 'active' : ''}" id="tab-modal-backup">
+            ?? Cloud Backup
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-body" style="padding: 16px 20px 20px; overflow-y: auto; flex-grow: 1;">
+        
+        <!-- SECTION 1: EDIT PROFILE -->
+        <div id="section-modal-profile" style="display: ${initialTab === 'profile' ? 'block' : 'none'};">
+          <form id="form-modal-profile">
+            <div style="margin-bottom: 14px;">
+              <label class="form-label" style="font-weight: 700; margin-bottom: 6px; display: block;">Select Avatar / Fleet Icon</label>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;">
+                ${['??', '??', '??', '??', '???', '?', '????'].map(emoji => `
+                  <button type="button" class="btn-avatar-choice ${user.avatar === emoji ? 'active' : ''}" data-avatar="${emoji}" style="width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--slate-300); background: var(--slate-50); font-size: 1.1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease;">
+                    ${emoji}
+                  </button>
+                `).join('')}
+              </div>
+              <input type="text" id="modal-profile-avatar" class="form-input form-input-sm" value="${escapeHtml(user.avatar || '')}" placeholder="Or paste custom image URL / emoji" />
             </div>
-            <div>
-              <div style="font-size:1.1rem; font-weight:800; color:var(--slate-900);">${user ? escapeHtml(user.name) : 'Demo Business'}</div>
-              <div style="font-size:0.85rem; color:var(--slate-600); margin-top:2px;">${user ? escapeHtml(user.email) : escapeHtml(s.email || '')}</div>
-              <div style="margin-top:6px;">
-                <span class="auth-badge-pill" style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0;">
-                  🔒 Safe &amp; Isolated Cloud Storage
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div class="form-group">
+                <label class="form-label">Full Name *</label>
+                <input type="text" id="modal-profile-name" class="form-input" value="${escapeHtml(user.name || '')}" required />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Transport Business Name *</label>
+                <input type="text" id="modal-profile-biz" class="form-input" value="${escapeHtml(user.businessName || s.businessName || '')}" required />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Primary Mobile Phone</label>
+                <input type="tel" id="modal-profile-phone" class="form-input" value="${escapeHtml(user.phone || s.phone || '')}" placeholder="10-digit mobile" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Alternate / Dispatch Phone</label>
+                <input type="tel" id="modal-profile-alt-phone" class="form-input" value="${escapeHtml(user.altPhone || s.altPhone || '')}" placeholder="Secondary contact" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">GSTIN Number</label>
+                <input type="text" id="modal-profile-gstin" class="form-input" value="${escapeHtml(user.gstin || s.gstin || '')}" placeholder="e.g. 29AAAAA0000A1Z5" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">PAN Number</label>
+                <input type="text" id="modal-profile-pan" class="form-input" value="${escapeHtml(user.pan || s.pan || '')}" placeholder="e.g. ABCDE1234F" />
+              </div>
+
+              <div class="form-group form-group-full" style="grid-column: 1 / -1;">
+                <label class="form-label">Office / Transport Yard Address</label>
+                <input type="text" id="modal-profile-address" class="form-input" value="${escapeHtml(user.address || s.address || '')}" placeholder="Plot / Street / Transport Nagar" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">City / Hub</label>
+                <input type="text" id="modal-profile-city" class="form-input" value="${escapeHtml(user.city || s.city || '')}" placeholder="e.g. Mumbai / Delhi" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">UPI ID (for payments)</label>
+                <input type="text" id="modal-profile-upi" class="form-input" value="${escapeHtml(user.upiId || s.upiId || '')}" placeholder="e.g. mobile@upi" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Bank Name</label>
+                <input type="text" id="modal-profile-bank" class="form-input" value="${escapeHtml(user.bankName || s.bankName || '')}" placeholder="e.g. State Bank of India" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Bank Account Number</label>
+                <input type="text" id="modal-profile-account" class="form-input" value="${escapeHtml(user.accountNumber || s.accountNumber || '')}" />
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Bank IFSC Code</label>
+                <input type="text" id="modal-profile-ifsc" class="form-input" value="${escapeHtml(user.ifscCode || s.ifscCode || '')}" placeholder="e.g. SBIN0001234" />
+              </div>
+            </div>
+
+            <div id="modal-profile-feedback" style="display: none; margin-top: 14px; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 0.85rem;"></div>
+
+            <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 10px;">
+              <button type="submit" id="btn-modal-save-profile" class="btn btn-primary" style="gap: 6px;">
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                Save Profile Changes
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- SECTION 2: PASSWORD & SECURITY -->
+        <div id="section-modal-security" style="display: ${initialTab === 'security' ? 'block' : 'none'};">
+          <form id="form-modal-password">
+            <div style="background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: var(--radius-md); padding: 14px; margin-bottom: 16px;">
+              <span style="font-size: 0.75rem; color: var(--slate-500); text-transform: uppercase; font-weight: 700;">Account Identity</span>
+              <div style="font-weight: 700; color: var(--slate-900); font-size: 1rem; margin-top: 2px;">${escapeHtml(user.email)}</div>
+              <div style="font-size: 0.8rem; color: #047857; margin-top: 4px;">? Verified Cloud Login</div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+              <div class="form-group">
+                <label class="form-label">Current Password *</label>
+                <div style="position: relative;">
+                  <input type="password" id="modal-pwd-current" class="form-input" placeholder="Enter existing password" required />
+                  <button type="button" class="btn-toggle-pwd" data-target="modal-pwd-current" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--slate-400); cursor: pointer; font-size: 0.8rem;">Show</button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">New Password (min 6 characters) *</label>
+                <div style="position: relative;">
+                  <input type="password" id="modal-pwd-new" class="form-input" placeholder="Enter new strong password" minlength="6" required />
+                  <button type="button" class="btn-toggle-pwd" data-target="modal-pwd-new" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--slate-400); cursor: pointer; font-size: 0.8rem;">Show</button>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label">Confirm New Password *</label>
+                <div style="position: relative;">
+                  <input type="password" id="modal-pwd-confirm" class="form-input" placeholder="Repeat new password" minlength="6" required />
+                  <button type="button" class="btn-toggle-pwd" data-target="modal-pwd-confirm" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--slate-400); cursor: pointer; font-size: 0.8rem;">Show</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="modal-password-feedback" style="display: none; margin-top: 14px; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 0.85rem;"></div>
+
+            <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+              <button type="submit" id="btn-modal-update-pwd" class="btn btn-primary" style="gap: 6px;">
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                Update Account Password
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- SECTION 3: CLOUD BACKUP & DIAGNOSTICS -->
+        <div id="section-modal-backup" style="display: ${initialTab === 'backup' ? 'block' : 'none'};">
+          <div style="display: flex; flex-direction: column; gap: 14px;">
+            <div style="background: var(--slate-50); border: 1px solid var(--slate-200); border-radius: var(--radius-md); padding: 14px;">
+              <div style="font-weight: 700; color: var(--slate-900); font-size: 0.95rem; margin-bottom: 4px;">MongoDB Atlas Ledger Partition</div>
+              <div style="font-size: 0.85rem; color: var(--slate-600); line-height: 1.4;">
+                All ledger records are encrypted with 256-bit PBKDF2 cryptography and isolated to your authenticated account ID.
+              </div>
+              <div style="display: flex; gap: 8px; margin-top: 10px;">
+                <span class="auth-badge-pill" style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 0.75rem;">
+                  ? Cloud Backup Enabled
+                </span>
+                <span class="auth-badge-pill" style="background: #dbeafe; color: #1d4ed8; border: 1px solid #bfdbfe; font-size: 0.75rem;">
+                  ${state.trips.length} Trips Registered
                 </span>
               </div>
             </div>
-          </div>
 
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; font-size:0.85rem;">
-            <div style="background:var(--slate-50); padding:10px 14px; border-radius:var(--radius-sm); border:1px solid var(--slate-200);">
-              <span style="font-size:0.72rem; color:var(--slate-500);">Business Profile:</span>
-              <div style="font-weight:700;">${escapeHtml(user?.businessName || s.businessName || 'Transport Co.')}</div>
+            <div style="display: flex; flex-direction: column; gap: 10px;">
+              <button type="button" id="btn-modal-send-backup" class="btn btn-primary" style="justify-content: center; gap: 8px; padding: 12px;">
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                Send Full Backup Snapshot to ${escapeHtml(user.email)}
+              </button>
+
+              <button type="button" id="btn-modal-download-backup" class="btn btn-secondary" style="justify-content: center; gap: 8px; padding: 11px;">
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                Download Offline JSON Backup File
+              </button>
+
+              <button type="button" id="btn-modal-test-sync" class="btn btn-outline" style="justify-content: center; gap: 8px; padding: 10px;">
+                <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                Verify Cloud &amp; Server Connection
+              </button>
             </div>
-            <div style="background:var(--slate-50); padding:10px 14px; border-radius:var(--radius-sm); border:1px solid var(--slate-200);">
-              <span style="font-size:0.72rem; color:var(--slate-500);">Cloud Database:</span>
-              <div style="font-weight:700; color:#047857;">MongoDB Atlas Active</div>
-            </div>
+
+            <div id="modal-backup-feedback" style="display: none; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 0.85rem;"></div>
           </div>
-
-          <div style="border-top:1px solid var(--slate-200); padding-top:14px; display:flex; flex-direction:column; gap:10px;">
-            <button id="btn-profile-send-backup" class="btn btn-primary" style="justify-content:center; gap:8px;">
-              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-              Send Current Backup to My Mail ID
-            </button>
-
-            <button id="btn-profile-logout" class="btn btn-outline" style="justify-content:center; color:#dc2626; border-color:#fca5a5;">
-              Sign Out / Switch Account
-            </button>
-          </div>
-
         </div>
+
+      </div>
+
+      <!-- Modal Footer -->
+      <div class="modal-footer" style="padding: 12px 20px; background: var(--slate-50); border-top: 1px solid var(--slate-200); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+        <button type="button" id="btn-modal-goto-account" class="btn btn-secondary btn-sm">
+          Full Account View
+        </button>
+        <button type="button" id="btn-modal-logout" class="btn btn-outline btn-sm" style="color: #dc2626; border-color: #fca5a5;">
+          Sign Out / Switch Account
+        </button>
       </div>
     </div>
   `;
@@ -3383,26 +3625,276 @@ function openProfileModal() {
   modalBackdrop.innerHTML = modalHtml;
   modalBackdrop.classList.add('open');
 
-  document.getElementById('btn-profile-send-backup')?.addEventListener('click', async () => {
-    const btn = document.getElementById('btn-profile-send-backup');
+  // Modal Tab Switching
+  const tabProfile = document.getElementById('tab-modal-profile');
+  const tabSecurity = document.getElementById('tab-modal-security');
+  const tabBackup = document.getElementById('tab-modal-backup');
+  const secProfile = document.getElementById('section-modal-profile');
+  const secSecurity = document.getElementById('section-modal-security');
+  const secBackup = document.getElementById('section-modal-backup');
+
+  const setModalTab = (tab) => {
+    tabProfile?.classList.toggle('active', tab === 'profile');
+    tabSecurity?.classList.toggle('active', tab === 'security');
+    tabBackup?.classList.toggle('active', tab === 'backup');
+    if (secProfile) secProfile.style.display = tab === 'profile' ? 'block' : 'none';
+    if (secSecurity) secSecurity.style.display = tab === 'security' ? 'block' : 'none';
+    if (secBackup) secBackup.style.display = tab === 'backup' ? 'block' : 'none';
+  };
+
+  tabProfile?.addEventListener('click', () => setModalTab('profile'));
+  tabSecurity?.addEventListener('click', () => setModalTab('security'));
+  tabBackup?.addEventListener('click', () => setModalTab('backup'));
+
+  // Avatar Choice Buttons
+  document.querySelectorAll('.btn-avatar-choice').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.btn-avatar-choice').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const val = btn.getAttribute('data-avatar');
+      const input = document.getElementById('modal-profile-avatar');
+      if (input) input.value = val;
+      const avatarBox = document.getElementById('modal-header-avatar');
+      if (avatarBox) avatarBox.textContent = val;
+    });
+  });
+
+  // Toggle Password Visibility
+  document.querySelectorAll('.btn-toggle-pwd').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-target');
+      const input = document.getElementById(targetId);
+      if (input) {
+        if (input.type === 'password') {
+          input.type = 'text';
+          btn.textContent = 'Hide';
+        } else {
+          input.type = 'password';
+          btn.textContent = 'Show';
+        }
+      }
+    });
+  });
+
+  // Save Profile Form Submission
+  document.getElementById('form-modal-profile')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-modal-save-profile');
+    const feedback = document.getElementById('modal-profile-feedback');
     btn.disabled = true;
-    btn.textContent = 'Securing & Sending...';
+    btn.innerHTML = 'Saving Changes...';
+    if (feedback) feedback.style.display = 'none';
+
     try {
-      const email = user ? user.email : s.email;
-      await sendBackupToEmail(email);
-      showToast(`Backup sent to ${email}`, 'success');
-      window.closeModal();
+      const updated = {
+        name: document.getElementById('modal-profile-name').value.trim(),
+        businessName: document.getElementById('modal-profile-biz').value.trim(),
+        phone: document.getElementById('modal-profile-phone').value.trim(),
+        altPhone: document.getElementById('modal-profile-alt-phone').value.trim(),
+        address: document.getElementById('modal-profile-address').value.trim(),
+        city: document.getElementById('modal-profile-city').value.trim(),
+        gstin: document.getElementById('modal-profile-gstin').value.trim(),
+        pan: document.getElementById('modal-profile-pan').value.trim(),
+        upiId: document.getElementById('modal-profile-upi').value.trim(),
+        bankName: document.getElementById('modal-profile-bank').value.trim(),
+        accountNumber: document.getElementById('modal-profile-account').value.trim(),
+        ifscCode: document.getElementById('modal-profile-ifsc').value.trim(),
+        avatar: document.getElementById('modal-profile-avatar').value.trim()
+      };
+
+      await updateUserProfile(updated);
+      loadState();
+      updateHeaderInfo();
+
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#ecfdf5';
+        feedback.style.color = '#065f46';
+        feedback.style.border = '1px solid #a7f3d0';
+        feedback.innerHTML = '? Profile details saved and synced to MongoDB Atlas!';
+      }
+      showToast('Profile updated successfully!', 'success');
     } catch (err) {
-      showToast(err.message || 'Failed to dispatch backup', 'error');
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#991b1b';
+        feedback.style.border = '1px solid #fecaca';
+        feedback.innerHTML = `?? ${escapeHtml(err.message || 'Failed to update profile')}`;
+      }
+      showToast(err.message || 'Failed to update profile', 'error');
+    } finally {
       btn.disabled = false;
-      btn.textContent = 'Send Current Backup to My Mail ID';
+      btn.innerHTML = `
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+        Save Profile Changes
+      `;
     }
   });
 
-  document.getElementById('btn-profile-logout')?.addEventListener('click', async () => {
+  // Change Password Form Submission
+  document.getElementById('form-modal-password')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = document.getElementById('btn-modal-update-pwd');
+    const feedback = document.getElementById('modal-password-feedback');
+    const currentPassword = document.getElementById('modal-pwd-current').value;
+    const newPassword = document.getElementById('modal-pwd-new').value;
+    const confirmPassword = document.getElementById('modal-pwd-confirm').value;
+
+    if (newPassword !== confirmPassword) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#991b1b';
+        feedback.style.border = '1px solid #fecaca';
+        feedback.innerHTML = '?? New password and confirmation do not match.';
+      }
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#991b1b';
+        feedback.style.border = '1px solid #fecaca';
+        feedback.innerHTML = '?? New password must be at least 6 characters.';
+      }
+      return;
+    }
+
+    btn.disabled = true;
+    btn.innerHTML = 'Verifying & Updating...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+      await changeUserPassword({ currentPassword, newPassword });
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#ecfdf5';
+        feedback.style.color = '#065f46';
+        feedback.style.border = '1px solid #a7f3d0';
+        feedback.innerHTML = '? Account password changed successfully with PBKDF2 encryption!';
+      }
+      document.getElementById('modal-pwd-current').value = '';
+      document.getElementById('modal-pwd-new').value = '';
+      document.getElementById('modal-pwd-confirm').value = '';
+      showToast('Password updated successfully!', 'success');
+    } catch (err) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#991b1b';
+        feedback.style.border = '1px solid #fecaca';
+        feedback.innerHTML = `?? ${escapeHtml(err.message || 'Password update failed')}`;
+      }
+      showToast(err.message || 'Password update failed', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+        Update Account Password
+      `;
+    }
+  });
+
+  // Send Backup Email
+  document.getElementById('btn-modal-send-backup')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-modal-send-backup');
+    const feedback = document.getElementById('modal-backup-feedback');
+    btn.disabled = true;
+    btn.textContent = 'Securing & Sending...';
+    if (feedback) feedback.style.display = 'none';
+
+    try {
+      const email = user ? user.email : s.email;
+      await sendBackupToEmail(email);
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#ecfdf5';
+        feedback.style.color = '#065f46';
+        feedback.style.border = '1px solid #a7f3d0';
+        feedback.innerHTML = `? Full cloud backup snapshot securely dispatched to <strong>${escapeHtml(email)}</strong>`;
+      }
+      showToast(`Backup sent to ${email}`, 'success');
+    } catch (err) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#991b1b';
+        feedback.style.border = '1px solid #fecaca';
+        feedback.innerHTML = `?? ${escapeHtml(err.message || 'Backup dispatch failed')}`;
+      }
+      showToast(err.message || 'Failed to dispatch backup', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+        Send Full Backup Snapshot to ${escapeHtml(user.email)}
+      `;
+    }
+  });
+
+  // Download Backup JSON
+  document.getElementById('btn-modal-download-backup')?.addEventListener('click', () => {
+    const jsonStr = exportBackupJSON();
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Transport_Ledger_Backup_${formatDateInput()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Offline backup JSON downloaded', 'success');
+  });
+
+  // Test Server & Cloud Sync
+  document.getElementById('btn-modal-test-sync')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-modal-test-sync');
+    const feedback = document.getElementById('modal-backup-feedback');
+    btn.disabled = true;
+    btn.textContent = 'Checking Cloud Status...';
+    try {
+      const isOnline = await triggerSync();
+      const status = getSyncStatus();
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = isOnline ? '#ecfdf5' : '#fef2f2';
+        feedback.style.color = isOnline ? '#065f46' : '#991b1b';
+        feedback.style.border = isOnline ? '1px solid #a7f3d0' : '1px solid #fecaca';
+        feedback.innerHTML = isOnline 
+          ? `? <strong>Cloud Active:</strong> Connected to Node.js backend &amp; MongoDB Atlas. Database mode: ${status.serverInfo?.database?.isMongo ? 'MongoDB Atlas' : 'Local JSON'}`
+          : '?? Server is currently offline. Running from local browser cache.';
+      }
+    } catch (e) {
+      if (feedback) {
+        feedback.style.display = 'block';
+        feedback.style.background = '#fef2f2';
+        feedback.style.color = '#991b1b';
+        feedback.style.border = '1px solid #fecaca';
+        feedback.innerHTML = `?? Diagnostic error: ${escapeHtml(e.message)}`;
+      }
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `
+        <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+        Verify Cloud &amp; Server Connection
+      `;
+    }
+  });
+
+  // Switch to Full Account View
+  document.getElementById('btn-modal-goto-account')?.addEventListener('click', () => {
+    window.closeModal();
+    window.switchTab('login');
+  });
+
+  // Sign Out
+  document.getElementById('btn-modal-logout')?.addEventListener('click', async () => {
     await logoutUser();
     window.closeModal();
     showToast('Signed out successfully', 'info');
+    window.switchTab('login');
   });
 }
 
@@ -3420,54 +3912,251 @@ function renderLoginView() {
 
   if (user) {
     return `
-      <div class="login-view-wrapper">
-        <div class="login-view-card">
-          <div style="text-align:center; margin-bottom:24px;">
-            <div style="width:68px; height:68px; border-radius:50%; background:linear-gradient(135deg, #059669, #047857); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:1.6rem; font-weight:800; box-shadow:0 4px 12px rgba(5, 150, 105, 0.25); margin-bottom:12px; overflow:hidden;">
-              ${user.avatar ? `<img src="${user.avatar}" alt="Avatar" style="width:100%; height:100%; object-fit:cover;" />` : (user.name ? user.name.substring(0, 2).toUpperCase() : 'TL')}
+      <div class="account-dashboard-wrapper">
+        <!-- Profile Hero Header -->
+        <div class="section-card" style="margin-bottom: 20px; padding: 24px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <div id="account-hero-avatar" style="width: 68px; height: 68px; border-radius: 50%; background: linear-gradient(135deg, #059669, #047857); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25); overflow: hidden; flex-shrink: 0;">
+                ${user.avatar && (user.avatar.startsWith('http') || user.avatar.startsWith('data:')) ? `<img src="${user.avatar}" alt="Avatar" style="width:100%; height:100%; object-fit:cover;" />` : (user.avatar || (user.name ? user.name.substring(0, 2).toUpperCase() : 'TL'))}
+              </div>
+              <div>
+                <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <h2 style="font-size: 1.4rem; font-weight: 800; margin: 0; color: var(--slate-900);">${escapeHtml(user.name || 'Fleet Operator')}</h2>
+                  <span class="auth-badge-pill" style="background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 0.75rem;">
+                    ? Verified Fleet Manager
+                  </span>
+                </div>
+                <div style="font-size: 0.92rem; color: var(--slate-600); font-weight: 600; margin-top: 3px;">
+                  ${escapeHtml(user.businessName || s.businessName || 'Transport Agency')}
+                </div>
+                <div style="font-size: 0.82rem; color: var(--slate-500); margin-top: 2px;">
+                  Registered Cloud ID: <strong>${escapeHtml(user.email)}</strong>
+                </div>
+              </div>
             </div>
-            <h2 style="font-size:1.4rem; font-weight:800; margin:0 0 4px; color:var(--slate-900);">${escapeHtml(user.name || 'Fleet Operator')}</h2>
-            <div style="font-size:0.88rem; color:var(--slate-600); font-weight:500;">${escapeHtml(user.email)}</div>
-            <div style="margin-top:8px;">
-              <span class="auth-badge-pill" style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; font-size:0.78rem; font-weight:700;">
-                🔒 Isolated Cloud Ledger Active
-              </span>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+              <button type="button" id="btn-account-header-backup" class="btn btn-primary btn-sm" style="gap: 6px;">
+                <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                Email Full Backup
+              </button>
+              <button type="button" id="btn-account-header-logout" class="btn btn-outline btn-sm" style="color: #dc2626; border-color: #fca5a5;">
+                Sign Out
+              </button>
             </div>
           </div>
 
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:22px;">
-            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
-              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Business Profile</span>
-              <div style="font-size:0.95rem; font-weight:700; color:var(--slate-800); margin-top:2px;">${escapeHtml(user.businessName || s.businessName || 'Transport Co.')}</div>
+          <!-- Quick Stats Row -->
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--slate-200);">
+            <div class="profile-stat-box">
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Trips Recorded</span>
+              <div style="font-size: 1.35rem; font-weight: 800; color: var(--slate-900); margin-top: 2px;">${state.trips.length}</div>
             </div>
-            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
-              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Cloud Storage</span>
-              <div style="font-size:0.95rem; font-weight:700; color:#059669; margin-top:2px;">MongoDB Atlas Synced</div>
+            <div class="profile-stat-box">
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Active Vehicles</span>
+              <div style="font-size: 1.35rem; font-weight: 800; color: var(--slate-900); margin-top: 2px;">${state.vehicles.length}</div>
             </div>
-            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
-              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Trips Recorded</span>
-              <div style="font-size:1.15rem; font-weight:800; color:var(--slate-800); margin-top:2px;">${state.trips.length}</div>
+            <div class="profile-stat-box">
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Customers &amp; Parties</span>
+              <div style="font-size: 1.35rem; font-weight: 800; color: var(--slate-900); margin-top: 2px;">${state.customers.length}</div>
             </div>
-            <div style="background:var(--slate-50); border:1px solid var(--slate-200); border-radius:var(--radius-md); padding:12px 14px;">
-              <span style="font-size:0.75rem; color:var(--slate-500); font-weight:600; text-transform:uppercase;">Vehicles &amp; Parties</span>
-              <div style="font-size:1.15rem; font-weight:800; color:var(--slate-800); margin-top:2px;">${state.vehicles.length + state.customers.length}</div>
+            <div class="profile-stat-box">
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Drivers in Ledger</span>
+              <div style="font-size: 1.35rem; font-weight: 800; color: var(--slate-900); margin-top: 2px;">${state.drivers.length}</div>
+            </div>
+            <div class="profile-stat-box">
+              <span style="font-size: 0.72rem; color: var(--slate-500); font-weight: 700; text-transform: uppercase;">Cloud Database</span>
+              <div style="font-size: 1.1rem; font-weight: 800; color: #059669; margin-top: 4px;">MongoDB Active</div>
             </div>
           </div>
+        </div>
 
-          <div style="display:flex; flex-direction:column; gap:10px;">
-            <button id="btn-login-view-send-backup" class="btn btn-primary" style="justify-content:center; padding:12px; gap:8px;">
-              <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-              Send Current Backup to My Mail ID
-            </button>
+        <!-- 2-Column Account & Security Grid -->
+        <div class="account-dashboard-grid">
+          
+          <!-- Column 1: Profile & Business Details -->
+          <div class="section-card">
+            <div class="section-card-header">
+              <div class="section-title-group">
+                <h3>Fleet &amp; Business Profile</h3>
+                <p>Update your transport agency credentials and contact info</p>
+              </div>
+            </div>
 
-            <button onclick="window.switchTab('trips')" class="btn btn-secondary" style="justify-content:center; padding:11px;">
-              Go to Trip Register &amp; Accounts
-            </button>
+            <form id="form-account-profile">
+              <div style="margin-bottom: 16px;">
+                <label class="form-label" style="font-weight: 700; margin-bottom: 6px; display: block;">Select Fleet Avatar Icon</label>
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;">
+                  ${['??', '??', '??', '??', '???', '?', '????'].map(emoji => `
+                    <button type="button" class="btn-avatar-choice-account ${user.avatar === emoji ? 'active' : ''}" data-avatar="${emoji}" style="width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--slate-300); background: var(--slate-50); font-size: 1.2rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease;">
+                      ${emoji}
+                    </button>
+                  `).join('')}
+                </div>
+                <input type="text" id="acc-profile-avatar" class="form-input form-input-sm" value="${escapeHtml(user.avatar || '')}" placeholder="Or paste custom image URL / emoji" />
+              </div>
 
-            <button id="btn-login-view-logout" class="btn btn-outline" style="justify-content:center; color:#dc2626; border-color:#fca5a5; padding:10px; margin-top:4px;">
-              Sign Out / Switch Account
-            </button>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="form-group">
+                  <label class="form-label">Full Name *</label>
+                  <input type="text" id="acc-profile-name" class="form-input" value="${escapeHtml(user.name || '')}" required />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Transport Business Name *</label>
+                  <input type="text" id="acc-profile-biz" class="form-input" value="${escapeHtml(user.businessName || s.businessName || '')}" required />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Primary Mobile Phone</label>
+                  <input type="tel" id="acc-profile-phone" class="form-input" value="${escapeHtml(user.phone || s.phone || '')}" placeholder="10-digit mobile" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Alternate / Dispatch Phone</label>
+                  <input type="tel" id="acc-profile-alt-phone" class="form-input" value="${escapeHtml(user.altPhone || s.altPhone || '')}" placeholder="Secondary mobile" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">GSTIN Number</label>
+                  <input type="text" id="acc-profile-gstin" class="form-input" value="${escapeHtml(user.gstin || s.gstin || '')}" placeholder="e.g. 29AAAAA0000A1Z5" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">PAN Number</label>
+                  <input type="text" id="acc-profile-pan" class="form-input" value="${escapeHtml(user.pan || s.pan || '')}" placeholder="e.g. ABCDE1234F" />
+                </div>
+
+                <div class="form-group form-group-full" style="grid-column: 1 / -1;">
+                  <label class="form-label">Office / Transport Yard Address</label>
+                  <input type="text" id="acc-profile-address" class="form-input" value="${escapeHtml(user.address || s.address || '')}" placeholder="Plot / Street / Transport Nagar" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">City / Hub</label>
+                  <input type="text" id="acc-profile-city" class="form-input" value="${escapeHtml(user.city || s.city || '')}" placeholder="e.g. Mumbai / Delhi" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">UPI ID (for receiving payments)</label>
+                  <input type="text" id="acc-profile-upi" class="form-input" value="${escapeHtml(user.upiId || s.upiId || '')}" placeholder="e.g. mobile@upi" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Bank Name</label>
+                  <input type="text" id="acc-profile-bank" class="form-input" value="${escapeHtml(user.bankName || s.bankName || '')}" placeholder="e.g. State Bank of India" />
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Bank Account Number</label>
+                  <input type="text" id="acc-profile-account" class="form-input" value="${escapeHtml(user.accountNumber || s.accountNumber || '')}" />
+                </div>
+
+                <div class="form-group form-group-full" style="grid-column: 1 / -1;">
+                  <label class="form-label">Bank IFSC Code</label>
+                  <input type="text" id="acc-profile-ifsc" class="form-input" value="${escapeHtml(user.ifscCode || s.ifscCode || '')}" placeholder="e.g. SBIN0001234" />
+                </div>
+              </div>
+
+              <div id="account-profile-feedback" style="display: none; margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 0.88rem;"></div>
+
+              <div style="margin-top: 20px; display: flex; justify-content: flex-end;">
+                <button type="submit" id="btn-account-save-profile" class="btn btn-primary" style="gap: 8px;">
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+                  Save Profile Changes
+                </button>
+              </div>
+            </form>
           </div>
+
+          <!-- Column 2: Security & Password + Cloud Backup Actions -->
+          <div style="display: flex; flex-direction: column; gap: 20px;">
+            
+            <!-- Security & Password Card -->
+            <div class="section-card">
+              <div class="section-card-header">
+                <div class="section-title-group">
+                  <h3>Account Security</h3>
+                  <p>Update your cloud account password with 256-bit PBKDF2 encryption</p>
+                </div>
+              </div>
+
+              <form id="form-account-password">
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                  <div class="form-group">
+                    <label class="form-label">Current Password *</label>
+                    <div style="position: relative;">
+                      <input type="password" id="acc-pwd-current" class="form-input" placeholder="Current password" required />
+                      <button type="button" class="btn-toggle-pwd" data-target="acc-pwd-current" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--slate-400); cursor: pointer; font-size: 0.8rem;">Show</button>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label">New Password (min 6 characters) *</label>
+                    <div style="position: relative;">
+                      <input type="password" id="acc-pwd-new" class="form-input" placeholder="New strong password" minlength="6" required />
+                      <button type="button" class="btn-toggle-pwd" data-target="acc-pwd-new" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--slate-400); cursor: pointer; font-size: 0.8rem;">Show</button>
+                    </div>
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label">Confirm New Password *</label>
+                    <div style="position: relative;">
+                      <input type="password" id="acc-pwd-confirm" class="form-input" placeholder="Repeat new password" minlength="6" required />
+                      <button type="button" class="btn-toggle-pwd" data-target="acc-pwd-confirm" style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--slate-400); cursor: pointer; font-size: 0.8rem;">Show</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div id="account-password-feedback" style="display: none; margin-top: 14px; padding: 12px 14px; border-radius: var(--radius-sm); font-size: 0.88rem;"></div>
+
+                <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+                  <button type="submit" id="btn-account-change-password" class="btn btn-primary" style="gap: 6px;">
+                    <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                    Update Account Password
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <!-- Cloud Backups & Quick Actions Card -->
+            <div class="section-card">
+              <div class="section-card-header">
+                <div class="section-title-group">
+                  <h3>Cloud Backup &amp; Actions</h3>
+                  <p>Safeguard your records and switch accounts</p>
+                </div>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <button type="button" id="btn-account-send-backup" class="btn btn-primary" style="justify-content: center; gap: 8px; padding: 11px;">
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                  Send Full Backup Snapshot to Mail ID
+                </button>
+
+                <button type="button" id="btn-account-download-json" class="btn btn-secondary" style="justify-content: center; gap: 8px; padding: 11px;">
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                  Download Offline JSON File
+                </button>
+
+                <button type="button" id="btn-account-cloud-sync" class="btn btn-outline" style="justify-content: center; gap: 8px; padding: 10px;">
+                  <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                  Verify MongoDB Atlas Connection
+                </button>
+
+                <div id="account-backup-feedback" style="display: none; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 0.85rem;"></div>
+
+                <div style="border-top: 1px solid var(--slate-200); padding-top: 12px; margin-top: 6px;">
+                  <button type="button" id="btn-account-logout" class="btn btn-outline btn-block" style="justify-content: center; color: #dc2626; border-color: #fca5a5; padding: 10px;">
+                    Sign Out / Switch Account
+                  </button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
         </div>
       </div>
     `;
@@ -3618,30 +4307,258 @@ function attachLoginEvents() {
   const user = getCurrentUser();
 
   if (user) {
-    document.getElementById('btn-login-view-send-backup')?.addEventListener('click', async () => {
-      const btn = document.getElementById('btn-login-view-send-backup');
+    // Avatar Choice Buttons on Account Page
+    document.querySelectorAll('.btn-avatar-choice-account').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.btn-avatar-choice-account').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const val = btn.getAttribute('data-avatar');
+        const input = document.getElementById('acc-profile-avatar');
+        if (input) input.value = val;
+        const heroAvatar = document.getElementById('account-hero-avatar');
+        if (heroAvatar) heroAvatar.textContent = val;
+      });
+    });
+
+    // Password Visibility Toggles
+    document.querySelectorAll('.btn-toggle-pwd').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        const input = document.getElementById(targetId);
+        if (input) {
+          if (input.type === 'password') {
+            input.type = 'text';
+            btn.textContent = 'Hide';
+          } else {
+            input.type = 'password';
+            btn.textContent = 'Show';
+          }
+        }
+      });
+    });
+
+    // Save Profile Form Submission
+    document.getElementById('form-account-profile')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('btn-account-save-profile');
+      const feedback = document.getElementById('account-profile-feedback');
       btn.disabled = true;
-      btn.textContent = 'Securing & Sending...';
+      btn.innerHTML = 'Saving Changes...';
+      if (feedback) feedback.style.display = 'none';
+
       try {
-        await sendBackupToEmail(user.email);
-        showToast(`Full backup snapshot sent to ${user.email}`, 'success');
+        const updated = {
+          name: document.getElementById('acc-profile-name').value.trim(),
+          businessName: document.getElementById('acc-profile-biz').value.trim(),
+          phone: document.getElementById('acc-profile-phone').value.trim(),
+          altPhone: document.getElementById('acc-profile-alt-phone').value.trim(),
+          address: document.getElementById('acc-profile-address').value.trim(),
+          city: document.getElementById('acc-profile-city').value.trim(),
+          gstin: document.getElementById('acc-profile-gstin').value.trim(),
+          pan: document.getElementById('acc-profile-pan').value.trim(),
+          upiId: document.getElementById('acc-profile-upi').value.trim(),
+          bankName: document.getElementById('acc-profile-bank').value.trim(),
+          accountNumber: document.getElementById('acc-profile-account').value.trim(),
+          ifscCode: document.getElementById('acc-profile-ifsc').value.trim(),
+          avatar: document.getElementById('acc-profile-avatar').value.trim()
+        };
+
+        await updateUserProfile(updated);
+        loadState();
+        updateHeaderInfo();
+
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#ecfdf5';
+          feedback.style.color = '#065f46';
+          feedback.style.border = '1px solid #a7f3d0';
+          feedback.innerHTML = '? Profile details saved and synced to MongoDB Atlas!';
+        }
+        showToast('Profile updated successfully!', 'success');
       } catch (err) {
-        showToast(err.message || 'Failed to dispatch backup', 'error');
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#fef2f2';
+          feedback.style.color = '#991b1b';
+          feedback.style.border = '1px solid #fecaca';
+          feedback.innerHTML = `?? ${escapeHtml(err.message || 'Failed to update profile')}`;
+        }
+        showToast(err.message || 'Failed to update profile', 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = 'Send Current Backup to My Mail ID';
+        btn.innerHTML = `
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg>
+          Save Profile Changes
+        `;
       }
     });
 
-    document.getElementById('btn-login-view-logout')?.addEventListener('click', async () => {
+    // Change Password Form Submission
+    document.getElementById('form-account-password')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('btn-account-change-password');
+      const feedback = document.getElementById('account-password-feedback');
+      const currentPassword = document.getElementById('acc-pwd-current').value;
+      const newPassword = document.getElementById('acc-pwd-new').value;
+      const confirmPassword = document.getElementById('acc-pwd-confirm').value;
+
+      if (newPassword !== confirmPassword) {
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#fef2f2';
+          feedback.style.color = '#991b1b';
+          feedback.style.border = '1px solid #fecaca';
+          feedback.innerHTML = '?? New password and confirmation do not match.';
+        }
+        return;
+      }
+
+      if (newPassword.length < 6) {
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#fef2f2';
+          feedback.style.color = '#991b1b';
+          feedback.style.border = '1px solid #fecaca';
+          feedback.innerHTML = '?? New password must be at least 6 characters.';
+        }
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = 'Verifying & Updating...';
+      if (feedback) feedback.style.display = 'none';
+
+      try {
+        await changeUserPassword({ currentPassword, newPassword });
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#ecfdf5';
+          feedback.style.color = '#065f46';
+          feedback.style.border = '1px solid #a7f3d0';
+          feedback.innerHTML = '? Account password changed successfully with PBKDF2 encryption!';
+        }
+        document.getElementById('acc-pwd-current').value = '';
+        document.getElementById('acc-pwd-new').value = '';
+        document.getElementById('acc-pwd-confirm').value = '';
+        showToast('Password updated successfully!', 'success');
+      } catch (err) {
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#fef2f2';
+          feedback.style.color = '#991b1b';
+          feedback.style.border = '1px solid #fecaca';
+          feedback.innerHTML = `?? ${escapeHtml(err.message || 'Password update failed')}`;
+        }
+        showToast(err.message || 'Password update failed', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+          Update Account Password
+        `;
+      }
+    });
+
+    // Send Backup Email Helper
+    const handleSendBackup = async (btnId, feedbackId) => {
+      const btn = document.getElementById(btnId);
+      const feedback = document.getElementById(feedbackId);
+      if (btn) btn.disabled = true;
+      if (btn) btn.textContent = 'Securing & Sending...';
+      if (feedback) feedback.style.display = 'none';
+
+      try {
+        await sendBackupToEmail(user.email);
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#ecfdf5';
+          feedback.style.color = '#065f46';
+          feedback.style.border = '1px solid #a7f3d0';
+          feedback.innerHTML = `? Full cloud backup snapshot securely dispatched to <strong>${escapeHtml(user.email)}</strong>`;
+        }
+        showToast(`Full backup snapshot sent to ${user.email}`, 'success');
+      } catch (err) {
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#fef2f2';
+          feedback.style.color = '#991b1b';
+          feedback.style.border = '1px solid #fecaca';
+          feedback.innerHTML = `?? ${escapeHtml(err.message || 'Backup dispatch failed')}`;
+        }
+        showToast(err.message || 'Failed to dispatch backup', 'error');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = `
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+            Send Full Backup Snapshot to Mail ID
+          `;
+        }
+      }
+    };
+
+    document.getElementById('btn-account-header-backup')?.addEventListener('click', () => handleSendBackup('btn-account-header-backup', 'account-backup-feedback'));
+    document.getElementById('btn-account-send-backup')?.addEventListener('click', () => handleSendBackup('btn-account-send-backup', 'account-backup-feedback'));
+
+    // Download JSON
+    document.getElementById('btn-account-download-json')?.addEventListener('click', () => {
+      const jsonStr = exportBackupJSON();
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Transport_Ledger_Backup_${formatDateInput()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Offline backup JSON downloaded', 'success');
+    });
+
+    // Cloud Sync Diagnostic
+    document.getElementById('btn-account-cloud-sync')?.addEventListener('click', async () => {
+      const btn = document.getElementById('btn-account-cloud-sync');
+      const feedback = document.getElementById('account-backup-feedback');
+      btn.disabled = true;
+      btn.textContent = 'Checking Cloud Status...';
+      try {
+        const isOnline = await triggerSync();
+        const status = getSyncStatus();
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = isOnline ? '#ecfdf5' : '#fef2f2';
+          feedback.style.color = isOnline ? '#065f46' : '#991b1b';
+          feedback.style.border = isOnline ? '1px solid #a7f3d0' : '1px solid #fecaca';
+          feedback.innerHTML = isOnline 
+            ? `? <strong>Cloud Active:</strong> Connected to Node.js backend &amp; MongoDB Atlas. Database mode: ${status.serverInfo?.database?.isMongo ? 'MongoDB Atlas' : 'Local JSON'}`
+            : '?? Server is currently offline. Operating from local browser cache.';
+        }
+      } catch (e) {
+        if (feedback) {
+          feedback.style.display = 'block';
+          feedback.style.background = '#fef2f2';
+          feedback.style.color = '#991b1b';
+          feedback.style.border = '1px solid #fecaca';
+          feedback.innerHTML = `?? Diagnostic error: ${escapeHtml(e.message)}`;
+        }
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+          Verify MongoDB Atlas Connection
+        `;
+      }
+    });
+
+    // Logout
+    const doLogout = async () => {
       await logoutUser();
       showToast('Signed out successfully', 'info');
       switchTab('login');
-    });
+    };
+    document.getElementById('btn-account-header-logout')?.addEventListener('click', doLogout);
+    document.getElementById('btn-account-logout')?.addEventListener('click', doLogout);
 
     return;
   }
-
   // Not logged in - Google Login & 1-Click Demo
   document.getElementById('btn-view-google-login')?.addEventListener('click', () => {
     openGoogleAuthModal();

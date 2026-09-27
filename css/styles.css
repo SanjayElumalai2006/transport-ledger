@@ -1618,3 +1618,41 @@ button, input, select, textarea { font-family: inherit; }
 }
 
 
+
+/* Enhanced Account & Profile Styles */
+.account-dashboard-wrapper {
+  max-width: 1050px;
+  margin: 20px auto 60px;
+  padding: 0 16px;
+}
+
+.account-dashboard-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 20px;
+}
+
+@media (max-width: 880px) {
+  .account-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.btn-avatar-choice:hover, .btn-avatar-choice.active {
+  border-color: var(--primary-600) !important;
+  background: #ecfdf5 !important;
+  transform: scale(1.08);
+}
+
+.profile-stat-box {
+  background: var(--slate-50);
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  transition: all 0.2s ease;
+}
+
+[data-theme="dark"] .profile-stat-box {
+ background: var(--slate-800);
+ border-color: var(--slate-700);
+}

@@ -330,6 +330,110 @@ export async function handleApiRequest(req, res, pathname, method, networkIps = 
     return true;
   }
 
+  // PUT or POST /api/auth/profile -> Update user profile details & business branding
+  if (pathname === '/api/auth/profile' && (method === 'PUT' || method === 'POST')) {
+    if (!authUser) {
+      sendError(res, 401, 'Authentication required to update profile');
+      return true;
+    }
+    try {
+      const body = await parseBody(req);
+      const allowedFields = [
+        'name', 'phone', 'altPhone', 'businessName', 'ownerName',
+        'address', 'city', 'gstin', 'pan', 'upiId', 'bankName',
+        'accountNumber', 'ifscCode', 'avatar', 'terms', 'email'
+      ];
+      
+      const updateData = {};
+      for (const field of allowedFields) {
+        if (body[field] !== undefined) {
+          updateData[field] = typeof body[field] === 'string' ? body[field].trim() : body[field];
+        }
+      }
+
+      if (updateData.name && !updateData.ownerName) {
+        updateData.ownerName = updateData.name;
+      }
+      if (updateData.ownerName && !updateData.name) {
+        updateData.name = updateData.ownerName;
+      }
+
+      updateData.updatedAt = new Date().toISOString();
+
+      const updatedUser = await db.updateUser(authUser.userId, updateData);
+      
+      // Keep associated user settings synchronized
+      await db.updateSettings(updateData, authUser.userId);
+
+      // Issue refreshed session token
+      const newToken = auth.createSessionToken(updatedUser || { ...authUser, ...updateData });
+
+      sendJson(res, 200, {
+        success: true,
+        message: 'Profile updated successfully',
+        user: updatedUser || { ...authUser, ...updateData },
+        token: newToken
+      });
+    } catch (err) {
+      console.error('[Profile Update Error]:', err);
+      sendError(res, 500, err.message || 'Failed to update user profile');
+    }
+    return true;
+  }
+
+  // POST /api/auth/change-password -> Securely update password
+  if (pathname === '/api/auth/change-password' && method === 'POST') {
+    if (!authUser) {
+      sendError(res, 401, 'Authentication required to change password');
+      return true;
+    }
+    try {
+      const body = await parseBody(req);
+      const { currentPassword, newPassword } = body;
+
+      if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
+        sendError(res, 400, 'New password must be at least 6 characters long');
+        return true;
+      }
+
+      const rawUser = await db.getUserRawById(authUser.userId);
+      if (!rawUser) {
+        sendError(res, 404, 'User account not found');
+        return true;
+      }
+
+      // If user has existing password credentials, verify current password
+      if (rawUser.passwordHash && rawUser.salt) {
+        if (!currentPassword) {
+          sendError(res, 400, 'Current password is required');
+          return true;
+        }
+        const isValid = auth.verifyPassword(currentPassword, rawUser.salt, rawUser.passwordHash);
+        if (!isValid) {
+          sendError(res, 400, 'Current password does not match our records');
+          return true;
+        }
+      }
+
+      // Hash new password
+      const { salt, hash } = auth.hashPassword(newPassword);
+      await db.updateUser(authUser.userId, {
+        salt,
+        passwordHash: hash,
+        passwordUpdatedAt: new Date().toISOString()
+      });
+
+      sendJson(res, 200, {
+        success: true,
+        message: 'Password changed successfully'
+      });
+    } catch (err) {
+      console.error('[Change Password Error]:', err);
+      sendError(res, 500, err.message || 'Failed to change password');
+    }
+    return true;
+  }
+
   // POST /api/backup/email -> Trigger full encrypted backup snapshot to user's registered Email ID
   if (pathname === '/api/backup/email' && method === 'POST') {
     const body = await parseBody(req);
